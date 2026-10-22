@@ -51,6 +51,10 @@ let handler;
 try {
   await mkdir(path.join(workspace, "data"));
   await copyFile(path.join(dataDir, "library.json"), path.join(workspace, "data", "library.json"));
+  // Uses the saved profile, or one passed with --profile FILE to try a profile without saving it.
+  const profileArg = process.argv.indexOf("--profile");
+  const profileSource = profileArg > 0 ? path.resolve(process.argv[profileArg + 1]) : path.join(dataDir, "profile.json");
+  if (existsSync(profileSource)) await copyFile(profileSource, path.join(workspace, "data", "profile.json"));
   globalThis.fetch = async (address, options) => {
     if (String(address).endsWith("/chat/completions")) prompts.push(JSON.parse(options.body).messages[0].content);
     return realFetch(address, options);
@@ -91,7 +95,7 @@ try {
   }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const report = [`# Live outfit eval, ${new Date().toISOString()}`, "", `Model: ${process.env.WARDROBE_STYLIST_MODEL || process.env.WARDROBE_LLM_MODEL}. Wardrobe: ${library.length} items, ${library.filter((item) => Object.keys(item.attributes || {}).length).length} described.`, ""];
+  const report = [`# Live outfit eval, ${new Date().toISOString()}`, "", `Model: ${process.env.WARDROBE_STYLIST_MODEL || process.env.WARDROBE_LLM_MODEL}. Wardrobe: ${library.length} items, ${library.filter((item) => Object.keys(item.attributes || {}).length).length} described. Profile: ${existsSync(path.join(workspace, "data", "profile.json")) ? "yes" : "none"}.`, ""];
   for (const result of results) {
     const { brief } = result;
     report.push(`## ${brief.occasion}${brief.conditions ? ` (${brief.conditions})` : ""}`, "");

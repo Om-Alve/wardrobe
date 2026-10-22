@@ -180,6 +180,21 @@ try {
   const swaps = JSON.parse(await readFile(path.join(dataDir, "stylist.json"), "utf8")).swaps;
   assert.deepEqual(swaps.map(({ out, in: added }) => [out, added]), [["hoodie", "tee"]], "The swap is recorded as a preference.");
 
+  const profileFile = path.join(dataDir, "profile.json");
+  await writeFile(profileFile, JSON.stringify({ enabled: true, contrast: "high", hairLightness: "dark", avoidedColors: ["olive"], fit: "relaxed" }));
+  queue(plan(CASUAL), pickBy((list) => list.slice(0, 1)));
+  await suggest({ count: 1, occasion: "Errands", selectedItemIds: ["tee", "hoodie", "cargo", "relaxed-trousers", "sneakers"] });
+  assert.match(prompts[0], /Wearer: high personal contrast \(dark hair\)/, "The plan sees the wearer's profile.");
+  assert.match(prompts[1], /Wearer: .*Prefers relaxed fits/, "The pick sees the wearer's profile.");
+  const contrastNotes = candidates(prompts[1]).map((entry) => entry.notes).join(" ");
+  assert.match(contrastNotes, /suits your high contrast/, "Looks with light-against-dark contrast are noted as suiting the wearer.");
+  assert.match(contrastNotes, /lower contrast than your coloring/, "Low-contrast looks are noted for a high-contrast wearer.");
+  await writeFile(profileFile, JSON.stringify({ enabled: false, contrast: "high" }));
+  queue(plan(CASUAL), pickBy((list) => list.slice(0, 1)));
+  await suggest({ count: 1, occasion: "Errands" });
+  assert.doesNotMatch(prompts.join("\n"), /Wearer:|contrast than your coloring|suits your high contrast/, "A switched-off profile changes nothing.");
+  await rm(profileFile);
+
   const efforts = [];
   globalThis.fetch = async (address, options) => {
     const body = JSON.parse(options.body);
@@ -198,7 +213,7 @@ try {
   assert.equal(fallback.status, 201, JSON.stringify(fallback.body));
   assert.deepEqual(efforts, ["none", null, "none", null], "A provider that rejects the reasoning setting gets each request again without it.");
 
-  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, and chosen-clothes Wada reference.");
+  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, and chosen-clothes Wada reference.");
 } finally {
   globalThis.fetch = realFetch;
   await rm(workspace, { recursive: true, force: true });

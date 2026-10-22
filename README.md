@@ -50,6 +50,10 @@ Suggestions are saved locally as drafts in `data/stylist.json`. Ask the stylist 
 
 The trip list and outfit flow took inspiration from [toop-closet's suitcases](https://github.com/akleventis/toop-closet) and [mywardrobe's anchor piece and supporting neutrals](https://github.com/newbie1668/mywardrobe). The included Wada color data is MIT licensed; see [its license notice](scripts/WADA-DATA-LICENSE.md).
 
+### Profile
+
+Open **Profile** to describe your coloring and preferences: skin depth on the Monk Skin Tone scale, hair, personal contrast, undertone, fit, goals, colors you love or avoid, and your own rules. **Suggest from my photo** sends your reference photo to the configured model once and fills in suggestions with a confidence for each; nothing is saved until you review it and click Save. Undertone counts only once you confirm it or the photo reading is confident, since lighting changes how skin looks. The profile adds a short description of you to the stylist's prompts and gently favors looks whose contrast and colors suit you; it never rules a look out, never stores weight or measurements, and never sends your height to the model. Switch it off at any time.
+
 ### For agents
 
 If you are setting up Wardrobe for a user, ask how they want to import their clothes:

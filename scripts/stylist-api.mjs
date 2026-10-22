@@ -7,6 +7,8 @@ import { describeItem, normalizeAttributes } from "./garment-attributes.mjs";
 import { assignHandles, buildShortlist, candidateLine, describePlan, enumerateLooks, partLabel, scoreLook, singleChanges, unsupportedColors, validatePicks, validatePlan } from "./outfit-engine.mjs";
 import { eligibleItems, PACK_STATES, relevantPalettes, validateLook, warningsFor } from "./stylist-core.mjs";
 import { chatJson, imageSettings, llmSettings } from "./llm-client.mjs";
+import { readProfile } from "./profile-api.mjs";
+import { profileScore, profileSummary } from "./profile.mjs";
 
 const BASE = "/api/stylist";
 const EMPTY = { version: 1, trips: [], looks: [], wears: [], swaps: [] };
@@ -331,7 +333,9 @@ export function stylistApi(options = {}) {
         const conditionsText = weather?.days?.length
           ? `${weather.summary}\n${weather.days.map((day) => `${day.date}: ${Math.round(day.low)}-${Math.round(day.high)}°C, rain chance ${day.rain}%`).join("\n")}`
           : weather?.summary || "not supplied; do not assume a forecast";
-        const context = `Occasion: ${occasion || "everyday"}\nConditions: ${conditionsText}\nUser request: ${brief || "comfortable, considered outfits"}`;
+        const profile = await readProfile(path.resolve(root, setting("WARDROBE_DATA_DIR", "data")));
+        const wearer = profileSummary(profile);
+        const context = `Occasion: ${occasion || "everyday"}\nConditions: ${conditionsText}\nUser request: ${brief || "comfortable, considered outfits"}${wearer ? `\n${wearer}` : ""}`;
 
         emit("plan");
         const planLines = sorted.map((item) => {
@@ -348,7 +352,11 @@ export function stylistApi(options = {}) {
         const feedback = deriveFeedback(state, await library());
         const { looks: pool, gaps, mentioned } = enumerateLooks(available, plan, { anchorId, rejectedSets: feedback.rejectedSets, rejectedPairs: feedback.rejectedPairs });
         if (!pool.length) throw bad(`No combination in this selection fits the request. ${gaps.join(" ")}`.trim(), 422);
-        const shortlist = buildShortlist(pool.map((look) => ({ ...look, ...scoreLook(look, feedback) })));
+        const shortlist = buildShortlist(pool.map((look) => {
+          const history = scoreLook(look, feedback);
+          const personal = profileScore(look, profile);
+          return { ...look, score: history.score + personal.score, notes: [...history.notes, ...personal.notes] };
+        }));
         const want = Math.min(count, shortlist.length);
         const accessories = new Map(sorted.filter((item) => item.part === "accessories_up").map((item) => [handleOf.get(item.id), item]));
         const required = [anchorId, ...plan.include].map((id) => available.find((item) => item.id === id)).filter((item) => item?.part === "accessories_up");
@@ -439,8 +447,9 @@ export function stylistApi(options = {}) {
         const selectedSet = new Set(current.selectionIds || []);
         const available = eligibleItems(trip, await library()).filter((item) => selectedSet.has(item.id));
         const { handleOf, itemOf, sorted } = assignHandles(available);
+        const wearer = profileSummary(await readProfile(path.resolve(root, setting("WARDROBE_DATA_DIR", "data"))));
         const options = singleChanges(current.garmentIds, available, handleOf, { anchorId: current.anchorId });
-        const prompt = `Revise this look for the user's latest request. Prefer the smallest change that answers it: when one of the single changes below does, return its label as "change" and set "pieces" to null. Only when the request needs more than one change, set "change" to null and give the complete look as "pieces": one top and one bottom, plus at most one outer layer, one pair of shoes, and two accessories. ${current.anchorId ? `Keep ${handleOf.get(current.anchorId)} in the look. ` : ""}${STYLING_GUIDANCE}\nCurrent look: ${current.garmentIds.map((id) => handleOf.get(id)).filter(Boolean).join(" + ")}; ${current.name}: ${current.reason}\nConversation: ${JSON.stringify(current.messages.slice(-8))}\nLatest request: ${message}\nOccasion: ${current.occasion || "everyday"}\nWeather: ${current.weather || "not supplied"}\n\nPieces:\n${sorted.map((item) => describeItem(item, handleOf.get(item.id))).join("\n")}\n\nSingle changes:\n${options.map((option) => `${option.label}: ${option.text}`).join("\n") || "none"}`;
+        const prompt = `Revise this look for the user's latest request. Prefer the smallest change that answers it: when one of the single changes below does, return its label as "change" and set "pieces" to null. Only when the request needs more than one change, set "change" to null and give the complete look as "pieces": one top and one bottom, plus at most one outer layer, one pair of shoes, and two accessories. ${current.anchorId ? `Keep ${handleOf.get(current.anchorId)} in the look. ` : ""}${STYLING_GUIDANCE}\nCurrent look: ${current.garmentIds.map((id) => handleOf.get(id)).filter(Boolean).join(" + ")}; ${current.name}: ${current.reason}\nConversation: ${JSON.stringify(current.messages.slice(-8))}\nLatest request: ${message}\nOccasion: ${current.occasion || "everyday"}\nWeather: ${current.weather || "not supplied"}${wearer ? `\n${wearer}` : ""}\n\nPieces:\n${sorted.map((item) => describeItem(item, handleOf.get(item.id))).join("\n")}\n\nSingle changes:\n${options.map((option) => `${option.label}: ${option.text}`).join("\n") || "none"}`;
         const idea = await askUntilValid({
           ...llm(), model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
           prompt, shape: REVISE_SHAPE, failure: "The LLM returned an invalid revision",
