@@ -13,10 +13,11 @@
     "normalize:garments:apply": "node scripts/normalize-library-images.mjs --apply",
     "describe:garments": "node scripts/describe-garments.mjs",
     "describe:garments:apply": "node scripts/describe-garments.mjs --apply",
-    "check": "npm run build && npm run test:stylist && npm run test:outfits && npm run test:import-llm",
+    "check": "npm run build && npm run test:stylist && npm run test:outfits && npm run test:import-llm && npm run test:profile",
     "test:stylist": "node scripts/verify-stylist.mjs",
     "test:outfits": "node scripts/eval-outfits.mjs",
     "test:import-llm": "node scripts/verify-import-llm.mjs",
+    "test:profile": "node scripts/verify-profile.mjs",
     "eval:live": "node scripts/eval-live-outfits.mjs"
   },
   "dependencies": {

@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { wardrobeImportApi } from "./scripts/import-job-api.mjs";
+import { profileApi } from "./scripts/profile-api.mjs";
 import { responsiveImageApi } from "./scripts/responsive-image-api.mjs";
 import { stylistApi } from "./scripts/stylist-api.mjs";
 
@@ -22,6 +23,6 @@ export default defineConfig(({ mode }) => {
       port: 4173,
       allowedHosts: ["localhost"],
     },
-    plugins: [react(), responsiveImageApi(), wardrobeImportApi({ env }), stylistApi({ env })],
+    plugins: [react(), responsiveImageApi(), wardrobeImportApi({ env }), stylistApi({ env }), profileApi({ env })],
   };
 });
