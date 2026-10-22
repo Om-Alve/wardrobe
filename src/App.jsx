@@ -5,6 +5,7 @@ import { OptimizedImage } from "./OptimizedImage.jsx";
 import { fieldsForPart, valueLabel } from "../scripts/garment-attributes.mjs";
 import { Profile } from "./Profile.jsx";
 import { Stylist } from "./Stylist.jsx";
+import { BuyNext } from "./BuyNext.jsx";
 
 const STORAGE_KEY = "open-wardrobe-edits-v1";
 const DELETED_STORAGE_KEY = "open-wardrobe-deleted-v1";
@@ -675,7 +676,7 @@ export function App() {
       <div className="app-topbar">
         <span className="app-brand">Wardrobe</span>
         <nav aria-label="Main navigation">
-          <button type="button" className={view === "wardrobe" ? "active" : ""} onClick={() => { setView("wardrobe"); setSelectedId(null); }}>Clothes</button>
+          <button type="button" className={["wardrobe", "buy"].includes(view) ? "active" : ""} onClick={() => { setView("wardrobe"); setSelectedId(null); }}>Clothes</button>
           <button type="button" className={view === "stylist" ? "active" : ""} onClick={() => { setView("stylist"); setSelectedId(null); }}>Planner</button>
           <button type="button" className={view === "outfits" ? "active" : ""} onClick={() => { setView("outfits"); setSelectedId(null); }}>Outfits</button>
           <button type="button" className={view === "profile" ? "active" : ""} onClick={() => { setView("profile"); setSelectedId(null); }}>Profile</button>
@@ -686,7 +687,10 @@ export function App() {
         <header className="gallery-header">
           <div className="gallery-meta-row">
             <h1 className="gallery-title">My wardrobe</h1>
-            <p className="piece-count">{items.length} {items.length === 1 ? "item" : "items"}</p>
+            <div className="gallery-meta-actions">
+              <p className="piece-count">{items.length} {items.length === 1 ? "item" : "items"}</p>
+              <button type="button" className="gallery-link" onClick={() => { setView("buy"); setSelectedId(null); }}>What to buy next</button>
+            </div>
           </div>
           <nav className="category-nav" aria-label="Filter wardrobe by item type">
             {TYPES.map((type) => (
@@ -723,7 +727,7 @@ export function App() {
 
       {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} />}
       <WardrobeImportFlow onGarmentApproved={addImportedItem} onModeledApproved={attachImportedModeledImage} />
-      </> : view === "profile" ? <Profile items={items} /> : <Stylist items={items} view={view} onNavigate={setView} />}
+      </> : view === "buy" ? <BuyNext items={items} /> : view === "profile" ? <Profile items={items} /> : <Stylist items={items} view={view} onNavigate={setView} />}
     </div>
   );
 }

@@ -50,6 +50,10 @@ Suggestions are saved locally as drafts in `data/stylist.json`. Ask the stylist 
 
 The trip list and outfit flow took inspiration from [toop-closet's suitcases](https://github.com/akleventis/toop-closet) and [mywardrobe's anchor piece and supporting neutrals](https://github.com/newbie1668/mywardrobe). The included Wada color data is MIT licensed; see [its license notice](scripts/WADA-DATA-LICENSE.md).
 
+### What to buy next
+
+On the Clothes page, **What to buy next** reviews your wardrobe for the occasions you dress for, which start from the ones you have asked the stylist about. The model plans each occasion and proposes pieces to buy; the app then adds each proposal to your wardrobe as a hypothetical item and counts the new complete outfits it unlocks: a distinct top and bottom you can wear with shoes, and with a layer when the occasion needs one. Pieces are ordered greedily, so each step shows what it adds on top of the pieces before it, and a first outfit for an occasion counts for more than a fifth outfit for one you already cover. Pieces that would repeat an earlier pick appear as alternatives, and near-twins of what you own are pointed out rather than ranked. The last review is saved.
+
 ### Profile
 
 Open **Profile** to describe your coloring and preferences: skin depth on the Monk Skin Tone scale, hair, personal contrast, undertone, fit, goals, colors you love or avoid, and your own rules. **Suggest from my photo** sends your reference photo to the configured model once and fills in suggestions with a confidence for each; nothing is saved until you review it and click Save. Undertone counts only once you confirm it or the photo reading is confident, since lighting changes how skin looks. The profile adds a short description of you to the stylist's prompts and gently favors looks whose contrast and colors suit you; it never rules a look out, never stores weight or measurements, and never sends your height to the model. Switch it off at any time.

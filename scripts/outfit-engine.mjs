@@ -87,6 +87,8 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
   const gaps = [];
   // Pieces a reason may name without wearing them: ones the request ruled out and ones a gap points to.
   const mentioned = items.filter((item) => excluded.has(item.id));
+  // Slots filled with the closest pieces because nothing fit; looks built on them are stand-ins, not complete outfits.
+  const relaxed = new Set();
   const choose = (part, maxWarmth) => {
     const pool = items.filter((item) => item.part === part && !excluded.has(item.id));
     const pinned = pool.filter((item) => required.has(item.id));
@@ -102,6 +104,7 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
     const best = Math.min(...pool.map((item) => miss(item, plan.maxWarmth)));
     const closest = pool.filter((item) => miss(item, plan.maxWarmth) === best);
     assign(closest);
+    relaxed.add(label);
     gaps.push(`No ${label} fit ${limits(plan.maxWarmth)}; the closest ${closest.length === 1 ? "is" : "are"} ${names(closest)}.`);
   }
 
@@ -139,7 +142,7 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
       looks.push({ ids, pieces });
     }
   }
-  return { looks, gaps, mentioned };
+  return { looks, gaps, mentioned, relaxed };
 }
 
 export function deltaE2000([L1, a1, b1], [L2, a2, b2]) {

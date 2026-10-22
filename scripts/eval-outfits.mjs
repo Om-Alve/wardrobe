@@ -180,6 +180,42 @@ try {
   const swaps = JSON.parse(await readFile(path.join(dataDir, "stylist.json"), "utf8")).swaps;
   assert.deepEqual(swaps.map(({ out, in: added }) => [out, added]), [["hoodie", "tee"]], "The swap is recorded as a preference.");
 
+  const occasionsBefore = (await invoke("/buy-next", "GET")).body;
+  assert.ok(occasionsBefore.occasions.includes("errands"), "Occasions to review default to the ones the wearer has asked for.");
+  const piece = (name, part, color, attributes, why = "") => ({ name, part, color, attributes, why });
+  queue(
+    () => ({ plans: [{ occasion: "everyday", plan: { ...PLAN, formality: [1, 3], shoeFormality: [1, 3] } }, { occasion: "formal dinner", plan: { ...PLAN, formality: [4, 5], shoeFormality: [4, 5] } }] }),
+    (prompt) => ({ candidates: [
+      piece("Second running sneakers", "shoes", "#3b5262", { category: "athletic_sneakers", formality: 1, warmth: 1 }),
+      piece("Grey dress trousers", "lowerbody", "#55585c", { category: "dress_trousers", formality: 4, warmth: 1 }, `Pairs with ${handles(prompt).get(name("dress-shirt"))}.`),
+      piece("Dark brown derbies", "shoes", "#4a3322", { category: "dress_shoes", formality: 4, warmth: 1 }),
+      piece("Black loafers", "shoes", "#141414", { category: "loafers", formality: 4, warmth: 1 }),
+      piece("Mystery top", "upperbody", "#ffffff", { category: "top" }),
+      piece("Pale blue dress shirt", "upperbody", "#d2e0ee", { category: "dress_shirt", formality: 4, warmth: 1 }),
+      piece("Grey canvas sneakers", "shoes", "#8a8d90", { category: "casual_sneakers", formality: 2, warmth: 1 }),
+      piece("White dress shirt", "upperbody", "#f8f8f4", { category: "dress_shirt", formality: 4, warmth: 1 }),
+    ] }),
+  );
+  const review = await invoke("/buy-next", "POST", { occasions: ["Everyday", "Formal dinner"] });
+  assert.equal(review.status, 200, JSON.stringify(review.body));
+  assert.match(prompts[1], /formal dinner: plan formality 4-5.*complete outfits now: 0; gaps: No shoes fit/, "Candidates are proposed knowing each occasion's coverage and gaps.");
+  const byName = Object.fromEntries(review.body.results.map((result) => [result.item.name, result]));
+  assert.equal(review.body.coverage.find((entry) => entry.occasion === "formal dinner").outfits, 0);
+  assert.equal(byName["Dark brown derbies"].step, 1, "Shoes that give a first formal outfit come first.");
+  assert.equal(byName["Grey dress trousers"].step, 2, "Trousers that only help once dress shoes exist come after them.");
+  assert.equal(byName["Grey dress trousers"].alone.added, 0);
+  assert.equal(byName["Black loafers"].alternativeTo, "Dark brown derbies", "A second pair that only repeats the first pick's job is shown as its alternative.");
+  assert.equal(byName["Second running sneakers"].similarTo, "Running sneakers", "A repeat of owned shoes is pointed out as a twin.");
+  assert.equal(byName["Grey canvas sneakers"].step, null);
+  assert.equal(byName["Grey canvas sneakers"].alternativeTo, null, "A piece that adds nothing even alone is simply covered.");
+  assert.equal(byName["Grey canvas sneakers"].note, "Shoes you own already complete the outfits it could join.", "A covered piece explains what it counted instead of the model's pitch.");
+  assert.ok(!byName["Mystery top"], "Proposals without formality and warmth are dropped.");
+  assert.equal(byName["Pale blue dress shirt"].similarTo, "Light blue dress shirt", "A near-twin of an owned piece is shown as similar rather than ranked.");
+  assert.equal(byName["Pale blue dress shirt"].step, null);
+  assert.ok(!byName["White dress shirt"].similarTo, "A white dress shirt is not a twin of a light blue one, even though both are pale.");
+  assert.equal(byName["Grey dress trousers"].why, `Pairs with ${name("dress-shirt")}.`, "Handles in explanations become garment names.");
+  assert.deepEqual((await invoke("/buy-next", "GET")).body.last.results.map((result) => result.item.name), review.body.results.map((result) => result.item.name), "The last review is kept.");
+
   const profileFile = path.join(dataDir, "profile.json");
   await writeFile(profileFile, JSON.stringify({ enabled: true, contrast: "high", hairLightness: "dark", avoidedColors: ["olive"], fit: "relaxed" }));
   queue(plan(CASUAL), pickBy((list) => list.slice(0, 1)));
@@ -213,7 +249,7 @@ try {
   assert.equal(fallback.status, 201, JSON.stringify(fallback.body));
   assert.deepEqual(efforts, ["none", null, "none", null], "A provider that rejects the reasoning setting gets each request again without it.");
 
-  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, and chosen-clothes Wada reference.");
+  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, what-to-buy order with alternatives, owned twins, and counted reasons, and chosen-clothes Wada reference.");
 } finally {
   globalThis.fetch = realFetch;
   await rm(workspace, { recursive: true, force: true });

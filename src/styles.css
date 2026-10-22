@@ -91,6 +91,24 @@ button { font: inherit; }
   letter-spacing: -.055em;
 }
 
+.gallery-meta-actions { display: flex; align-items: center; gap: 18px; }
+
+.gallery-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line);
+  cursor: pointer;
+}
+
+.gallery-link:hover,
+.gallery-link:focus-visible { text-decoration-color: currentColor; outline: none; }
+
 .piece-count {
   margin: 0;
   font-size: 13px;

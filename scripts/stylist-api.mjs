@@ -7,23 +7,30 @@ import { describeItem, normalizeAttributes } from "./garment-attributes.mjs";
 import { assignHandles, buildShortlist, candidateLine, describePlan, enumerateLooks, partLabel, scoreLook, singleChanges, unsupportedColors, validatePicks, validatePlan } from "./outfit-engine.mjs";
 import { eligibleItems, PACK_STATES, relevantPalettes, validateLook, warningsFor } from "./stylist-core.mjs";
 import { chatJson, imageSettings, llmSettings } from "./llm-client.mjs";
+import { attributeOptions, DEFAULT_OCCASIONS, historyOccasions, normalizeCandidates, rankPurchases, wardrobeCoverage } from "./buy-next.mjs";
 import { readProfile } from "./profile-api.mjs";
 import { profileScore, profileSummary } from "./profile.mjs";
 
 const BASE = "/api/stylist";
 const EMPTY = { version: 1, trips: [], looks: [], wears: [], swaps: [] };
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const PLAN_SHAPE = '{"plan":{"formality":[lowest,highest],"shoeFormality":[lowest,highest],"maxWarmth":<0-4 or null>,"outerLayer":"needed|optional|skip","layerMaxWarmth":<0-4 or null>,"include":["handle"],"exclude":["handle"]}}';
+const PLAN_OBJECT = '{"formality":[lowest,highest],"shoeFormality":[lowest,highest],"maxWarmth":<0-4 or null>,"outerLayer":"needed|optional|skip","layerMaxWarmth":<0-4 or null>,"include":["handle"],"exclude":["handle"]}';
+const PLAN_SHAPE = `{"plan":${PLAN_OBJECT}}`;
 const REVISE_SHAPE = '{"change":"V1" or null,"pieces":["T1","B1"] or null,"name":"...","reason":"..."}';
-const PLAN_GUIDANCE = `Set one plan for this request from the occasion, the conditions, and the user's request.
-- formality: [lowest, highest] on the 1-5 scale (1 athletic, 2 casual, 3 smart casual, 4 dressy or business, 5 formal): the range the occasion calls for, widened only when the user asks for deliberate high-low dressing.
+const PLAN_FIELDS = `- formality: [lowest, highest] on the 1-5 scale (1 athletic, 2 casual, 3 smart casual, 4 dressy or business, 5 formal): the range the occasion calls for, widened only when the user asks for deliberate high-low dressing.
 - shoeFormality: [lowest, highest] for shoes, which can sit apart from the clothes; for example, athletic sneakers (1) suit a day of walking even with casual clothes.
 - maxWarmth: the warmest top, bottoms, or shoes the conditions allow, on the 0-4 scale (0 hot weather only, 1 light, 2 medium, 3 warm, 4 cold-weather outerwear), or null when the weather sets no limit.
 - outerLayer: "needed", "optional", or "skip". When the day swings between cool and warm, dress the base for the warm part and plan a removable layer for the cool part.
 - layerMaxWarmth: the warmest outer layer that suits the conditions, 0-4, or null.
 - include: handles of pieces the user explicitly asks to wear, otherwise an empty list.
 - exclude: handles of pieces the user explicitly rules out, otherwise an empty list.`;
+const PLAN_GUIDANCE = `Set one plan for this request from the occasion, the conditions, and the user's request.\n${PLAN_FIELDS}`;
 const STYLING_GUIDANCE = "Each item lists its colors (lightness, temperature, and whether each is a base neutral, earth neutral, or accent), formality from 1 (athletic) to 5 (formal), warmth from 0 (hot weather) to 4 (cold weather), and its fabric, pattern, and fit when known. Build from the bottoms and top first. Let base and earth neutrals carry most of the outfit and use at most two accent colors. When pieces share a color family, step the lightness clearly or vary the texture so they do not read as a near miss. Wear at most one statement piece and at most two patterns, at different scales. Tuck shirts that have tails. Add a bag or watch only when it serves the occasion or was requested; accessories do not define the clothing colors. If the wardrobe lacks a piece the occasion needs, leave that slot out and say what is missing in the reason. Use Wada combinations only as loose color inspiration. In the reason, describe the actual garment colors and why the pieces work together; do not cite palette numbers or claim colors the outfit does not contain.";
+
+function planLine(item, handleOf) {
+  const { formality, warmth } = normalizeAttributes(item.attributes, item.part);
+  return `${handleOf.get(item.id)} | ${partLabel(item.part)} | ${item.name} | formality ${formality ?? "unknown"}, warmth ${warmth ?? "unknown"}`;
+}
 
 function bad(message, status = 400) {
   return Object.assign(new Error(message), { status });
@@ -338,10 +345,7 @@ export function stylistApi(options = {}) {
         const context = `Occasion: ${occasion || "everyday"}\nConditions: ${conditionsText}\nUser request: ${brief || "comfortable, considered outfits"}${wearer ? `\n${wearer}` : ""}`;
 
         emit("plan");
-        const planLines = sorted.map((item) => {
-          const { formality, warmth } = normalizeAttributes(item.attributes, item.part);
-          return `${handleOf.get(item.id)} | ${partLabel(item.part)} | ${item.name} | formality ${formality ?? "unknown"}, warmth ${warmth ?? "unknown"}`;
-        });
+        const planLines = sorted.map((item) => planLine(item, handleOf));
         const plan = await askUntilValid({
           ...llm(), model, signal, shape: PLAN_SHAPE, failure: "The LLM did not return a usable plan", onRetry: () => emit("retrying"),
           prompt: `You are a practical personal stylist planning outfits. ${PLAN_GUIDANCE}\n\n${context}\n\nItems:\n${planLines.join("\n")}`,
@@ -396,6 +400,50 @@ export function stylistApi(options = {}) {
           return res.end();
         }
         return send(res, 201, looks);
+      }
+      if (url.pathname === `${BASE}/buy-next` && req.method === "GET") {
+        const state = await load();
+        const history = historyOccasions(state.looks);
+        return send(res, 200, { occasions: history.size ? [...history.keys()].slice(0, 6) : DEFAULT_OCCASIONS, last: state.buyNext || null });
+      }
+      if (url.pathname === `${BASE}/buy-next` && req.method === "POST") {
+        const body = await input(req);
+        const names = [...new Set((Array.isArray(body.occasions) ? body.occasions : []).map((name) => field(name, 60).toLowerCase()).filter(Boolean))];
+        if (!names.length || names.length > 8) throw bad("Name 1 to 8 occasions.");
+        if (!llm().configured) throw bad("Configure WARDROBE_LLM_API_KEY or WARDROBE_LLM_BASE_URL in .env and restart the app.", 422);
+        const items = await library();
+        if (!items.some((item) => item.part === "upperbody") || !items.some((item) => item.part === "lowerbody")) throw bad("Import at least one top and one bottom first.");
+        const history = historyOccasions((await load()).looks);
+        const profile = await readProfile(path.resolve(root, setting("WARDROBE_DATA_DIR", "data")));
+        const wearer = profileSummary(profile);
+        const model = setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini")));
+        const { handleOf, itemOf, sorted } = assignHandles(items);
+        const plans = await askUntilValid({
+          ...llm(), model, failure: "The LLM did not return usable plans",
+          shape: `{"plans":[{"occasion":"...","plan":${PLAN_OBJECT}}]} with one entry per occasion, in the order listed`,
+          prompt: `You are a practical personal stylist reviewing a wardrobe. For each occasion below, set the plan you would use when dressing for it, assuming typical weather unless the occasion names the conditions. Each plan has these fields:\n${PLAN_FIELDS}${wearer ? `\n${wearer}` : ""}\n\nOccasions:\n${names.map((name, index) => `${index + 1}. ${name}`).join("\n")}\n\nItems:\n${sorted.map((item) => planLine(item, handleOf)).join("\n")}`,
+          check: (raw) => {
+            if (!Array.isArray(raw.plans) || raw.plans.length !== names.length) throw new Error(`Return exactly ${names.length} entries in "plans", one per occasion in the order listed.`);
+            return raw.plans.map((entry) => validatePlan(entry?.plan, itemOf));
+          },
+        });
+        const occasions = names.map((name, index) => ({ name, weight: history.get(name) || 1, plan: plans[index] }));
+        const coverage = wardrobeCoverage(items, occasions, profile);
+        const candidates = await askUntilValid({
+          ...llm(), model, failure: "The LLM did not suggest usable pieces",
+          shape: '{"candidates":[{"name":"...","part":"upperbody|lowerbody|wholebody_up|shoes","color":"#rrggbb","attributes":{"category":"...","formality":<1-5>,"warmth":<0-4>},"why":"..."}]}',
+          prompt: `You are a practical personal stylist reviewing this wardrobe for its next purchase. Propose 8 different pieces the wearer could buy that would add the most new complete outfits across the occasions below. A complete outfit is a top and bottoms worn with shoes, plus an outer layer when the occasion needs one, all fitting that occasion's plan. Favor pieces that close the listed gaps and combine with many existing pieces, and avoid near-duplicates of what the wardrobe already has. Propose only tops, bottoms, outer layers, or shoes: specific, widely available pieces, each in one main color.${wearer ? ` ${wearer}` : ""}\n\nOccasions:\n${coverage.map((entry, index) => `- ${entry.occasion}: plan ${describePlan(occasions[index].plan)}; complete outfits now: ${entry.outfits}${entry.gaps.length ? `; gaps: ${entry.gaps.join(" ")}` : ""}`).join("\n")}\n\nWardrobe:\n${sorted.map((item) => describeItem(item, handleOf.get(item.id))).join("\n")}\n\nGive each piece its attributes with these keys and options; formality runs from 1 (athletic) to 5 (formal) and warmth from 0 (hot weather) to 4 (cold weather):\n${attributeOptions()}\nIn "why", say in one sentence which occasions and existing pieces it works with.`,
+          check: (raw) => {
+            const list = normalizeCandidates(raw);
+            if (!list.length) throw new Error('Return "candidates" with a part, a #rrggbb color, and at least formality and warmth in "attributes" for each.');
+            return list;
+          },
+        });
+        // The model refers to pieces by handle; the page shows their names instead.
+        for (const candidate of candidates) candidate.why = candidate.why.replace(/\b[TBOSA]\d+\b/g, (handle) => itemOf.get(handle)?.name || handle);
+        const record = { at: new Date().toISOString(), occasions: occasions.map(({ name, weight, plan }) => ({ name, weight, plan })), ...rankPurchases(items, occasions, candidates, profile) };
+        await transact((state) => { state.buyNext = record; });
+        return send(res, 200, record);
       }
       const wearMatch = url.pathname.match(/^\/api\/stylist\/wears\/([a-f0-9-]{36})$/);
       if (wearMatch && req.method === "DELETE") {

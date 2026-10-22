@@ -1,0 +1,27 @@
+.buy-page { max-width: 860px; }
+.buy-occasions { display: flex; flex-direction: column; gap: 14px; margin-top: 28px; }
+.buy-occasions .stylist-section-heading { margin-bottom: 0; }
+.buy-coverage { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px 24px; margin: 26px 0 20px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.buy-coverage strong { display: block; color: var(--ink); font-size: 13px; font-weight: 600; }
+.buy-coverage small { display: block; margin-top: 3px; }
+.buy-item { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 18px; }
+.buy-swatch { display: block; width: 54px; aspect-ratio: 1; border: 1px solid rgba(0, 0, 0, .12); }
+.buy-swatch.small { width: 38px; }
+.buy-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.buy-heading h3 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.buy-copy { min-width: 0; }
+.buy-copy p { margin: 8px 0 0; font-size: 13px; line-height: 1.5; }
+.buy-copy .buy-gain { margin-top: 4px; font-weight: 600; }
+.buy-changes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.buy-changes span { border: 1px solid var(--line); padding: 3px 8px; font-size: 11px; }
+.buy-examples { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 14px; }
+.buy-example { display: flex; flex-direction: column; gap: 5px; }
+.buy-example-pieces { display: flex; gap: 4px; }
+.buy-example-pieces img { width: 38px; height: 38px; object-fit: contain; background: #eeeee9; }
+.buy-example small { color: var(--muted); font-size: 11px; }
+
+@media (max-width: 600px) {
+  .buy-item { grid-template-columns: 40px minmax(0, 1fr); gap: 12px; }
+  .buy-swatch { width: 40px; }
+  .buy-heading { flex-direction: column; gap: 2px; }
+}
