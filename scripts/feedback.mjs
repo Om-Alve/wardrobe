@@ -56,6 +56,10 @@ export function deriveFeedback(state = {}, items = [], now = Date.now()) {
     }
     if (look.createdAt && daysSince(look.createdAt, now) <= 3 && look.verdict !== "down") shownRecently.add(key);
   }
+  for (const entry of state.hidden || []) {
+    creditAll(entry.garmentIds, SIGNALS.down, entry.at);
+    rejectedSets.add(signature(core(entry.garmentIds)));
+  }
 
   const lastWorn = new Map();
   const wearCount = new Map(items.map((item) => [item.id, 0]));

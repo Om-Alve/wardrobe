@@ -2,17 +2,18 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { deriveFeedback, today } from "./feedback.mjs";
+import { deriveFeedback, signature, today } from "./feedback.mjs";
 import { describeItem, normalizeAttributes } from "./garment-attributes.mjs";
 import { assignHandles, buildShortlist, candidateLine, describePlan, enumerateLooks, partLabel, scoreLook, singleChanges, unsupportedColors, validatePicks, validatePlan } from "./outfit-engine.mjs";
 import { eligibleItems, PACK_STATES, relevantPalettes, validateLook, warningsFor } from "./stylist-core.mjs";
 import { chatJson, imageSettings, llmSettings } from "./llm-client.mjs";
 import { attributeOptions, DEFAULT_OCCASIONS, historyOccasions, normalizeCandidates, rankPurchases, wardrobeCoverage } from "./buy-next.mjs";
+import { allOutfits, finishOutfit, librarySignature, readAssignments, validateGenres } from "./lookbook.mjs";
 import { readProfile } from "./profile-api.mjs";
 import { profileScore, profileSummary } from "./profile.mjs";
 
 const BASE = "/api/stylist";
-const EMPTY = { version: 1, trips: [], looks: [], wears: [], swaps: [] };
+const EMPTY = { version: 1, trips: [], looks: [], wears: [], swaps: [], hidden: [] };
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const PLAN_OBJECT = '{"formality":[lowest,highest],"shoeFormality":[lowest,highest],"maxWarmth":<0-4 or null>,"outerLayer":"needed|optional|skip","layerMaxWarmth":<0-4 or null>,"include":["handle"],"exclude":["handle"]}';
 const PLAN_SHAPE = `{"plan":${PLAN_OBJECT}}`;
@@ -180,6 +181,51 @@ export function stylistApi(options = {}) {
     return { hasLlm: llm().configured, hasImageKey: Boolean(image().key), hasReference };
   };
 
+  // Builds the lookbook: every outfit the wardrobe makes, sorted by the model into genres it names for this wardrobe.
+  let lookbookRun = null;
+  async function buildLookbook() {
+    const items = await library();
+    const state = await load();
+    const profile = await readProfile(path.resolve(root, setting("WARDROBE_DATA_DIR", "data")));
+    const wearer = profileSummary(profile);
+    const outfits = allOutfits(items, { profile, hidden: deriveFeedback(state, items).rejectedSets });
+    if (!outfits.length) throw bad("Add at least one top and one bottom to build outfits.", 422);
+    const { handleOf, sorted } = assignHandles(items);
+    outfits.forEach((outfit, index) => { outfit.handle = `K${index + 1}`; });
+    const line = (outfit) => `${outfit.handle}: ${outfit.ids.map((id) => handleOf.get(id)).join(" + ")}${outfit.note ? ` (${outfit.note.toLowerCase()})` : ""}`;
+    const legend = sorted.filter((item) => item.part !== "accessories_up").map((item) => describeItem(item, handleOf.get(item.id))).join("\n");
+    const model = setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini")));
+    const genres = await askUntilValid({
+      ...llm(), model, shape: '{"genres":[{"name":"...","description":"..."}]}', failure: "The LLM did not return usable genres", check: validateGenres,
+      prompt: `You are a personal stylist organizing a lookbook of every outfit this wardrobe can make. Define 4 to 7 genres to browse them by: style categories that suit this wardrobe${wearer ? " and its owner" : ""}, each with a short name of one to three words and a one-sentence description. Order them from most casual to most formal.${wearer ? `\n${wearer}` : ""}\n\nWardrobe:\n${legend}\n\nSample outfits:\n${outfits.slice(0, 60).map(line).join("\n")}`,
+    });
+    const genreText = genres.map((genre) => `- ${genre.name}: ${genre.description}`).join("\n");
+    const ask = (list, extra = "") => askModel({
+      ...llm(), model, shape: '{"outfits":[{"id":"K1","genre":"...","name":"..."}]} with every outfit listed',
+      prompt: `Sort each outfit below into the genre it fits best and give it a short name of two to four words that describes its pieces truthfully. Use "skip" as the genre only for combinations whose clothes do not work together, such as clashing formality or colors. A note that an outfit needs other shoes means the wardrobe lacks suitable shoes, not that the clothes clash, so sort it into a genre as usual.${extra}\n\nGenres:\n${genreText}${wearer ? `\n${wearer}` : ""}\n\nWardrobe:\n${legend}\n\nOutfits:\n${list.map(line).join("\n")}`,
+    });
+    const sortBatch = async (batch) => {
+      const first = readAssignments(await ask(batch), batch, genres);
+      if (!first.missing.length) return first.assigned;
+      const rest = batch.filter((outfit) => first.missing.includes(outfit.handle));
+      const second = readAssignments(await ask(rest, " An earlier answer missed these outfits or used a genre that is not listed; answer for each of them."), rest, genres);
+      // Outfits still unsorted after a second ask are kept under Other rather than dropped.
+      return [...first.assigned, ...second.assigned, ...rest.filter((outfit) => second.missing.includes(outfit.handle)).map((outfit) => ({ ...outfit, genre: "Other", name: "" }))];
+    };
+    const batches = Array.from({ length: Math.ceil(outfits.length / 100) }, (_, index) => outfits.slice(index * 100, index * 100 + 100));
+    const placed = (await Promise.all(batches.map(sortBatch))).flat();
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const used = new Set(placed.map((outfit) => outfit.genre));
+    const record = {
+      at: new Date().toISOString(), signature: librarySignature(items),
+      // Genres are named before outfits are sorted, so any that end up empty are dropped.
+      genres: [...genres, { name: "Other", description: "Outfits the stylist could not place." }].filter((genre) => used.has(genre.name)),
+      outfits: placed.sort((a, b) => b.score - a.score).map((outfit) => finishOutfit(outfit, byId)),
+    };
+    await transact((current) => { current.lookbook = record; });
+    return record;
+  }
+
   async function generatePhoto(id) {
     try {
       const state = await load();
@@ -231,7 +277,7 @@ export function stylistApi(options = {}) {
     if (!url.pathname.startsWith(BASE)) return next();
     try {
       if (url.pathname === `${BASE}/state` && req.method === "GET") {
-        return send(res, 200, { wears: [], swaps: [], ...await load(), setup: await setup() });
+        return send(res, 200, { wears: [], swaps: [], hidden: [], ...await load(), setup: await setup() });
       }
       if (url.pathname === `${BASE}/weather` && req.method === "GET") {
         const destination = field(url.searchParams.get("destination"), 100);
@@ -413,6 +459,57 @@ export function stylistApi(options = {}) {
           return res.end();
         }
         return send(res, 201, looks);
+      }
+      if (url.pathname === `${BASE}/lookbook` && req.method === "GET") {
+        const lookbook = (await load()).lookbook || null;
+        return send(res, 200, { lookbook, stale: Boolean(lookbook) && lookbook.signature !== librarySignature(await library()) });
+      }
+      if (url.pathname === `${BASE}/lookbook` && req.method === "POST") {
+        if (!llm().configured) throw bad("Configure WARDROBE_LLM_API_KEY or WARDROBE_LLM_BASE_URL in .env and restart the app.", 422);
+        // One build at a time; a second request waits for the build already running.
+        lookbookRun ||= buildLookbook().finally(() => { lookbookRun = null; });
+        return send(res, 200, { lookbook: await lookbookRun, stale: false });
+      }
+      if (url.pathname === `${BASE}/outfits/save` && req.method === "POST") {
+        const body = await input(req);
+        const items = await library();
+        let idea;
+        try { idea = validateLook({ name: field(body.name, 80) || "Outfit", reason: field(body.reason, 500), occasion: field(body.genre, 80), garmentIds: body.garmentIds }, items); }
+        catch (error) { throw bad(error.message); }
+        const core = (ids) => signature(ids.filter((id) => items.find((item) => item.id === id)?.part !== "accessories_up"));
+        const look = await transact((state) => {
+          const existing = state.looks.find((entry) => entry.savedAt && core(entry.garmentIds) === core(idea.garmentIds));
+          if (existing) return existing;
+          const now = new Date().toISOString();
+          const created = {
+            ...idea, plan: null, gaps: [], gapNotes: [], id: randomUUID(), tripId: null, anchorId: null, verdict: null,
+            selectionIds: items.map((item) => item.id), status: "idea", warnings: [], weather: "", weatherSource: null,
+            image: null, error: null, messages: [], date: "", savedAt: now, createdAt: now, updatedAt: now,
+          };
+          state.looks.push(created);
+          return created;
+        });
+        return send(res, 201, look);
+      }
+      if (url.pathname === `${BASE}/outfits/hide` && req.method === "POST") {
+        const body = await input(req);
+        const known = new Set((await library()).map((item) => item.id));
+        const garmentIds = [...new Set(Array.isArray(body.garmentIds) ? body.garmentIds : [])].filter((id) => known.has(id));
+        if (garmentIds.length < 2) throw bad("Choose the outfit to hide.");
+        await transact((state) => {
+          state.hidden = [...(state.hidden || []), { garmentIds, at: new Date().toISOString() }];
+          if (state.lookbook) state.lookbook.outfits = state.lookbook.outfits.filter((outfit) => signature(outfit.ids) !== signature(garmentIds));
+        });
+        return send(res, 200, { hidden: true });
+      }
+      if (url.pathname === `${BASE}/wears` && req.method === "POST") {
+        const body = await input(req);
+        const known = new Set((await library()).map((item) => item.id));
+        const garmentIds = [...new Set(Array.isArray(body.garmentIds) ? body.garmentIds : [])].filter((id) => known.has(id));
+        if (!garmentIds.length) throw bad("Choose at least one worn item.");
+        const wear = { id: randomUUID(), lookId: null, date: dateField(body.date) || today(), garmentIds, at: new Date().toISOString() };
+        await transact((state) => { state.wears = [...(state.wears || []), wear]; });
+        return send(res, 201, wear);
       }
       if (url.pathname === `${BASE}/buy-next` && req.method === "GET") {
         const state = await load();

@@ -267,6 +267,61 @@ try {
   assert.ok(candidates(prompts[1]).length <= 20);
   await writeFile(path.join(dataDir, "library.json"), JSON.stringify(items));
 
+  // The lookbook runs on its own data folder so earlier verdicts do not change which outfits exist.
+  const mainHandler = handler;
+  await mkdir(path.join(workspace, "lookbook-data"));
+  await writeFile(path.join(workspace, "lookbook-data", "library.json"), JSON.stringify(items));
+  const lookbookPlugin = stylistApi({ env: { WARDROBE_LLM_API_KEY: "eval-key", WARDROBE_DATA_DIR: "lookbook-data" } });
+  await lookbookPlugin.configResolved({ root: workspace });
+  lookbookPlugin.configureServer({ middlewares: { use(value) { handler = value; } } });
+  const outfitList = (prompt) => {
+    const names = new Map([...handles(prompt)].map(([itemName, handle]) => [handle, itemName]));
+    return [...prompt.split("\nOutfits:\n")[1].matchAll(/^(K\d+): ([^(\n]+?)(?: \((.*)\))?$/gm)].map((match) => ({ id: match[1], names: match[2].split(" + ").map((handle) => names.get(handle)), note: match[3] || "" }));
+  };
+  const sortOutfits = (skipOne) => (prompt) => ({
+    outfits: outfitList(prompt).filter((outfit, index) => !(skipOne && index === 0)).map((outfit) => ({
+      id: outfit.id,
+      genre: outfit.names.includes(name("hoodie")) && outfit.names.includes(name("formal-trousers")) ? "skip" : outfit.names.includes(name("formal-trousers")) ? "Dressy" : "Casual",
+      name: outfit.names.includes(name("dress-shirt")) && outfit.names.includes(name("cargo")) ? "Purple haze" : "Named look",
+    })),
+  });
+  queue(
+    () => ({ genres: [{ name: "Casual", description: "Everyday." }, { name: "Athleisure", description: "Sporty." }, { name: "Dressy", description: "Evenings." }] }),
+    sortOutfits(true),
+    sortOutfits(false),
+  );
+  const built = await invoke("/lookbook", "POST");
+  assert.equal(built.status, 200, JSON.stringify(built.body));
+  const book = built.body.lookbook;
+  assert.equal(book.outfits.length, 18, "Every top and bottom, with and without the layer, becomes an outfit.");
+  assert.match(prompts[2], /An earlier answer missed these outfits/, "Outfits the model missed are asked about again.");
+  assert.deepEqual(book.genres.map((genre) => genre.name), ["Casual", "Dressy"], "Genres that end up empty are dropped.");
+  assert.ok(book.outfits.filter((outfit) => outfit.genre === "skip").length === 2, "Combinations the model leaves out are kept as left out, not discarded.");
+  const formalNoShoes = book.outfits.find((outfit) => outfit.ids.length === 2 && outfit.ids.includes("dress-shirt") && outfit.ids.includes("formal-trousers"));
+  assert.equal(formalNoShoes.note, "Needs dressier shoes", "Running sneakers are not paired with dress clothes; the outfit says what it needs.");
+  assert.ok(book.outfits.filter((outfit) => outfit.ids.includes("dress-shirt") && outfit.ids.includes("cargo")).every((outfit) => outfit.name !== "Purple haze"), "A name claiming a color the outfit lacks is replaced.");
+  assert.equal((await invoke("/lookbook", "GET")).body.stale, false);
+  await writeFile(path.join(workspace, "lookbook-data", "library.json"), JSON.stringify([...items, { ...items[0], id: "tee-2", name: "Grey tee", color: "#8a8d90" }]));
+  assert.equal((await invoke("/lookbook", "GET")).body.stale, true, "Adding a piece marks the lookbook out of date.");
+  await writeFile(path.join(workspace, "lookbook-data", "library.json"), JSON.stringify(items));
+
+  const favorite = book.outfits.find((outfit) => outfit.genre === "Casual");
+  const savedOnce = await invoke("/outfits/save", "POST", { garmentIds: favorite.ids, name: favorite.name, genre: "Casual", reason: "Everyday." });
+  assert.equal(savedOnce.status, 201, JSON.stringify(savedOnce.body));
+  assert.ok(savedOnce.body.savedAt);
+  assert.equal((await invoke("/outfits/save", "POST", { garmentIds: favorite.ids, name: favorite.name })).body.id, savedOnce.body.id, "Saving the same outfit twice keeps one saved look.");
+  const dull = book.outfits.find((outfit) => outfit.genre === "Casual" && outfit !== favorite);
+  assert.equal((await invoke("/outfits/hide", "POST", { garmentIds: dull.ids })).status, 200);
+  const afterHide = (await invoke("/lookbook", "GET")).body.lookbook.outfits;
+  assert.ok(!afterHide.some((outfit) => [...outfit.ids].sort().join() === [...dull.ids].sort().join()), "A hidden outfit leaves the lookbook.");
+  queue(plan({ ...PLAN, formality: [1, 5], shoeFormality: [1, 5] }), pickBy((list) => list.slice(0, 1)));
+  await suggest({ count: 1, occasion: "Anything" });
+  assert.ok(!candidates(prompts[1]).some((entry) => [...entry.names].sort().join() === dull.ids.map(name).sort().join()), "The stylist avoids a hidden outfit too.");
+  const wore = await invoke("/wears", "POST", { garmentIds: favorite.ids });
+  assert.equal(wore.status, 201);
+  assert.equal(wore.body.lookId, null, "An outfit can be logged as worn without saving it first.");
+  handler = mainHandler;
+
   const profileFile = path.join(dataDir, "profile.json");
   await writeFile(profileFile, JSON.stringify({ enabled: true, contrast: "high", hairLightness: "dark", avoidedColors: ["olive"], fit: "relaxed" }));
   queue(plan(CASUAL), pickBy((list) => list.slice(0, 1)));
@@ -300,7 +355,7 @@ try {
   assert.equal(fallback.status, 201, JSON.stringify(fallback.body));
   assert.deepEqual(efforts, ["none", null, "none", null], "A provider that rejects the reasoning setting gets each request again without it.");
 
-  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, what-to-buy order with alternatives, owned twins, and counted reasons, pieces that only work together, anchor over plan includes, stale revisions, re-offered turned-down looks, non-color words, a very large wardrobe, and chosen-clothes Wada reference.");
+  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, what-to-buy order with alternatives, owned twins, and counted reasons, pieces that only work together, anchor over plan includes, stale revisions, re-offered turned-down looks, non-color words, a very large wardrobe, the lookbook with genres, left-out outfits, staleness, saving, hiding, and wears, and chosen-clothes Wada reference.");
 } finally {
   globalThis.fetch = realFetch;
   await rm(workspace, { recursive: true, force: true });

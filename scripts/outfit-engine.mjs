@@ -11,6 +11,9 @@ const SHORTLIST_SIZE = 20;
 // Above this many combinations, shoe and layer options are trimmed to those closest to the plan.
 const MAX_LOOKS = 20000;
 
+// History that treats every piece as equally fresh, so a look with no style penalties scores exactly 1.
+export const NEUTRAL_HISTORY = { recency: () => 1, underuse: () => 1, pairScore: () => null, lastWornDays: () => null, liked: new Map(), wornSets: new Map(), shownRecently: new Set() };
+
 export function assignHandles(items) {
   const handleOf = new Map();
   const itemOf = new Map();

@@ -1,0 +1,49 @@
+.outfits-tabs { margin: 26px 0 22px; }
+.lookbook { display: flex; flex-direction: column; gap: 22px; }
+.lookbook.is-building .lookbook-section { opacity: .55; }
+.lookbook-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.lookbook-rebuild { display: inline-flex; align-items: center; gap: 5px; }
+.lookbook-genres { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -10px; }
+.lookbook-genres button {
+  border: 1px solid var(--line);
+  padding: 6px 11px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.lookbook-genres button span { margin-left: 6px; color: var(--muted); }
+.lookbook-genres button.active { border-color: var(--ink); background: var(--ink); color: var(--paper); }
+.lookbook-genres button.active span { color: inherit; opacity: .7; }
+.lookbook-section h2 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.02em; }
+.lookbook-section > p { margin: 4px 0 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.lookbook-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 14px; }
+.lookbook-tile { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--line); background: #fff; }
+.lookbook-collage { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: 4px; padding: 12px; aspect-ratio: 1; background: #eeeee9; }
+.lookbook-collage img { width: 100%; height: 100%; min-height: 0; object-fit: contain; }
+.lookbook-copy { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px 4px; }
+.lookbook-copy strong { font-size: 13px; font-weight: 600; line-height: 1.3; }
+.lookbook-copy small { color: var(--muted); font-size: 11px; }
+.lookbook-actions { display: flex; gap: 2px; margin-top: auto; padding: 4px 6px 6px; }
+.lookbook-actions button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.lookbook-actions button:hover:not(:disabled) { border-color: var(--line); color: var(--ink); }
+.lookbook-actions button[aria-pressed="true"] { color: var(--ink); }
+.lookbook-actions button:last-child:not(:first-child) { margin-left: auto; }
+.lookbook-left-out summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+.lookbook-left-out summary span { margin-left: 4px; }
+.lookbook-left-out[open] summary { margin-bottom: 14px; }
+
+@media (max-width: 520px) {
+  .lookbook-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .lookbook-collage { padding: 8px; }
+}

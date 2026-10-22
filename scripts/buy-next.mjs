@@ -1,14 +1,12 @@
 // Ranks pieces the wearer could buy by the new complete outfits each would add across their occasions.
 // The model plans each occasion and proposes the pieces; code counts the outfits, as in capsule-wardrobe versatility.
 import { CATEGORIES, colorProfile, fieldsForPart, lab, normalizeAttributes, PART_LABELS } from "./garment-attributes.mjs";
-import { deltaE2000, enumerateLooks, scoreLook } from "./outfit-engine.mjs";
+import { deltaE2000, enumerateLooks, NEUTRAL_HISTORY, scoreLook } from "./outfit-engine.mjs";
 import { profileScore } from "./profile.mjs";
 
 const HEX = /^#[0-9a-f]{6}$/i;
 export const BUYABLE_PARTS = ["upperbody", "lowerbody", "wholebody_up", "shoes"];
 export const DEFAULT_OCCASIONS = ["everyday", "office", "dinner out", "formal event"];
-// History that treats every piece as equally fresh, so a look with no style penalties scores exactly 1.
-const NEUTRAL = { recency: () => 1, underuse: () => 1, pairScore: () => null, lastWornDays: () => null, liked: new Map(), wornSets: new Map(), shownRecently: new Set() };
 // Looks whose style penalties add up to more than 0.25, two clashes for example, are not counted as outfits worth wearing.
 const QUALITY_FLOOR = 0.75;
 
@@ -62,7 +60,7 @@ function judge(profile) {
   const cache = new Map();
   return (look) => {
     const key = look.ids.join("|");
-    if (!cache.has(key)) cache.set(key, scoreLook(look, NEUTRAL).score + profileScore(look, profile).score);
+    if (!cache.has(key)) cache.set(key, scoreLook(look, NEUTRAL_HISTORY).score + profileScore(look, profile).score);
     return cache.get(key);
   };
 }

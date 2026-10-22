@@ -50,6 +50,10 @@ Suggestions are saved locally as drafts in `data/stylist.json`. Ask the stylist 
 
 The trip list and outfit flow took inspiration from [toop-closet's suitcases](https://github.com/akleventis/toop-closet) and [mywardrobe's anchor piece and supporting neutrals](https://github.com/newbie1668/mywardrobe). The included Wada color data is MIT licensed; see [its license notice](scripts/WADA-DATA-LICENSE.md).
 
+### All outfits
+
+**Outfits** opens on every outfit your wardrobe can make: each top and bottom, alone and under each layer, with the shoes closest in formality. When no shoes come within two steps of the clothes, the outfit says it needs dressier or more casual shoes instead of pairing them anyway. The model names four to seven genres that suit your wardrobe, sorts every outfit into one, and names each outfit; combinations it thinks do not work stay under a collapsed "Left out" list rather than disappearing. Filter by genre, save an outfit, mark it worn, or hide it; hidden outfits also stay out of the planner's suggestions. The lookbook is kept in `data/stylist.json` and rebuilds itself when your wardrobe changes. Very large wardrobes keep the best 400 outfits.
+
 ### What to buy next
 
 On the Clothes page, **What to buy next** reviews your wardrobe for the occasions you dress for, which start from the ones you have asked the stylist about. The model plans each occasion and proposes pieces to buy; the app then adds each proposal to your wardrobe as a hypothetical item and counts the new complete outfits it unlocks: a distinct top and bottom you can wear with shoes, and with a layer when the occasion needs one. Pieces are ordered greedily, so each step shows what it adds on top of the pieces before it, and a first outfit for an occasion counts for more than a fifth outfit for one you already cover. Pieces that would repeat an earlier pick appear as alternatives, and near-twins of what you own are pointed out rather than ranked. The last review is saved.

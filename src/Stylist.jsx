@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ThumbsDown, ThumbsUp } from "@phosphor-icons/react";
+import { Lookbook } from "./Lookbook.jsx";
 import "./stylist.css";
 
 const PART_NAMES = {
@@ -226,6 +227,7 @@ export function Stylist({ items, view, onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState("all");
   const [savedScope, setSavedScope] = useState("all");
+  const [outfitsTab, setOutfitsTab] = useState("all");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -324,6 +326,7 @@ export function Stylist({ items, view, onNavigate }) {
       onSave={async (id) => {
         if (await act(() => request(`/looks/${id}/save`, "POST"), "Outfit saved.")) {
           setSavedScope(look.tripId || "all");
+          setOutfitsTab("saved");
           onNavigate("outfits");
         }
       }}
@@ -351,7 +354,7 @@ export function Stylist({ items, view, onNavigate }) {
 
   return (
     <main className={`stylist-page${savedView ? " saved-outfits-page" : ""}`}>
-      <header className="stylist-hero"><h1>{savedView ? "Saved outfits" : "Outfit planner"}</h1>{!savedView && <p>Build looks from your wardrobe or a trip packing list.</p>}</header>
+      <header className="stylist-hero"><h1>{savedView ? "Outfits" : "Outfit planner"}</h1>{!savedView && <p>Build looks from your wardrobe or a trip packing list.</p>}</header>
       {!savedView && !state.setup.hasLlm && <p className="stylist-alert">Set <code>WARDROBE_LLM_API_KEY</code> or <code>WARDROBE_LLM_BASE_URL</code> in <code>.env</code> and restart the app to ask for outfits.</p>}
       {!savedView && !state.setup.hasImageKey && <p className="stylist-alert">Add <code>OPENAI_IMAGE_API_KEY</code> to <code>.env</code> to create modeled photos.</p>}
       {!savedView && !state.setup.hasReference && <p className="stylist-alert">Add <code>data/model-reference.png</code> to create modeled photos.</p>}
@@ -359,6 +362,11 @@ export function Stylist({ items, view, onNavigate }) {
       {notice && <p className="stylist-notice" role="status">{notice}</p>}
 
       {savedView ? <div className="stylist-saved-page">
+        <nav className="category-nav outfits-tabs" aria-label="Outfit views">
+          <button type="button" className={outfitsTab === "all" ? "active" : ""} aria-pressed={outfitsTab === "all"} onClick={() => setOutfitsTab("all")}>All outfits</button>
+          <button type="button" className={outfitsTab === "saved" ? "active" : ""} aria-pressed={outfitsTab === "saved"} onClick={() => setOutfitsTab("saved")}>Saved{allSavedLooks.length ? ` ${allSavedLooks.length}` : ""}</button>
+        </nav>
+        {outfitsTab === "all" ? <Lookbook items={items} looks={state.looks} wears={state.wears || []} hasLlm={state.setup.hasLlm} busy={busy} act={act} /> : <>
         {showSavedFilters && <nav className="stylist-saved-filters" aria-label="Saved outfit collections">
           <button type="button" className={savedScope === "all" ? "active" : ""} onClick={() => setSavedScope("all")}>All</button>
           {wardrobeSavedCount > 0 && <button type="button" className={savedScope === "wardrobe" ? "active" : ""} onClick={() => setSavedScope("wardrobe")}>Whole wardrobe</button>}
@@ -366,9 +374,10 @@ export function Stylist({ items, view, onNavigate }) {
         </nav>}
         <section className="stylist-results">
           {loading && <div className="stylist-empty">Loading outfits…</div>}
-          {!loading && !error && !savedLooks.length && <div className="stylist-empty">No saved outfits here. Save a draft from the planner to add one.</div>}
+          {!loading && !error && !savedLooks.length && <div className="stylist-empty">No saved outfits here. Save one from All outfits or the planner.</div>}
           {savedLooks.map((look) => renderLook(look))}
         </section>
+        </>}
       </div> :
       <div className="stylist-layout">
         <aside className="stylist-sidebar">
