@@ -1,11 +1,10 @@
-// Every outfit the wardrobe can make, for browsing by genre. Code builds and scores the outfits; the model names the genres and sorts outfits into them.
+// A curated lookbook: code builds every outfit and ranks it by style and by Sanzo Wada's dictionary; the model picks the ones worth wearing and groups them by genre.
 import { signature } from "./feedback.mjs";
 import { normalizeAttributes } from "./garment-attributes.mjs";
 import { NEUTRAL_HISTORY, scoreLook, unsupportedColors } from "./outfit-engine.mjs";
 import { profileScore } from "./profile.mjs";
 
 const MAX_OUTFITS = 400;
-export const SKIP = "skip";
 
 // Changes whenever a piece is added, removed, recolored, or redescribed, so a saved lookbook knows it is out of date.
 export function librarySignature(items) {
@@ -46,38 +45,48 @@ export function allOutfits(items, { profile = {}, hidden = new Set() } = {}) {
   return [...perPair.values()].flat().sort((a, b) => b.score - a.score).slice(0, MAX_OUTFITS);
 }
 
-export function validateGenres(raw) {
+export function validateGenres(raw, [fewest, most] = [3, 6]) {
   const list = Array.isArray(raw?.genres) ? raw.genres : [];
   const genres = list.map((entry) => ({ name: String(entry?.name || "").trim().slice(0, 40), description: String(entry?.description || "").trim().slice(0, 200) }))
-    .filter((entry) => entry.name && entry.name.toLowerCase() !== SKIP);
+    .filter((entry) => entry.name);
   const unique = [...new Map(genres.map((entry) => [entry.name.toLowerCase(), entry])).values()];
-  if (unique.length < 3 || unique.length > 8) throw new Error('Return 4 to 7 genres in "genres", each with a name and a description.');
+  if (unique.length < fewest || unique.length > most) throw new Error(`Return ${fewest} to ${most} genres in "genres", each with a name and a description.`);
   return unique;
 }
 
-// Checks one batch of genre assignments; outfits it misses are listed so the model can be asked again.
-export function readAssignments(raw, batch, genres) {
-  const names = new Map(genres.map((genre) => [genre.name.toLowerCase(), genre.name]));
-  const answers = new Map((Array.isArray(raw?.outfits) ? raw.outfits : []).map((entry) => [entry?.id, entry]));
-  const assigned = [];
-  const missing = [];
-  for (const outfit of batch) {
-    const answer = answers.get(outfit.handle);
-    const genre = String(answer?.genre || "").trim().toLowerCase();
-    if (!answer || !(genre === SKIP || names.has(genre))) { missing.push(outfit.handle); continue; }
-    assigned.push({ ...outfit, genre: genre === SKIP ? SKIP : names.get(genre), name: String(answer.name || "").trim().slice(0, 60) });
-  }
-  return { assigned, missing };
-}
-
-// A name built from the pieces, for outfits the model did not name or named with colors they do not have.
+// A name built from the pieces, for outfits named with colors they do not have.
 export function plainName(pieces) {
   const short = (item) => item.name.split(/\s+/).slice(-2).join(" ");
   return pieces.filter((piece) => piece.part !== "shoes").map(short).join(" + ");
 }
 
-export function finishOutfit(outfit, byId) {
-  const pieces = outfit.ids.map((id) => byId.get(id)).filter(Boolean);
-  const name = outfit.name && !unsupportedColors(outfit.name, pieces).length ? outfit.name : plainName(pieces);
-  return { ids: outfit.ids, genre: outfit.genre, name, note: outfit.note, score: outfit.score };
+// Checks the stylist's picks: listed outfits only, each once, in a named genre, with a reason that mentions only colors the outfit has.
+// Reasons with false colors are sent back once, then dropped; names with false colors are replaced.
+export function readCuration(raw, shortlist, { fewest, most = 30, checkReasons = false }) {
+  const genres = validateGenres(raw);
+  const names = new Map(genres.map((genre) => [genre.name.toLowerCase(), genre.name]));
+  const byHandle = new Map(shortlist.map((outfit) => [outfit.handle, outfit]));
+  const picks = Array.isArray(raw?.outfits) ? raw.outfits : [];
+  const unknown = picks.filter((pick) => !byHandle.has(pick?.id)).map((pick) => pick?.id);
+  if (unknown.length) throw new Error(`Choose only listed outfits; ${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} not listed.`);
+  const misplaced = picks.filter((pick) => !names.has(String(pick.genre || "").trim().toLowerCase())).map((pick) => pick.id);
+  if (misplaced.length) throw new Error(`Put every outfit in one of your genres; ${misplaced.join(", ")} ${misplaced.length === 1 ? "is" : "are"} not.`);
+  const chosen = [...new Map(picks.map((pick) => [pick.id, pick])).values()].slice(0, most);
+  if (chosen.length < fewest) throw new Error(`Choose at least ${fewest} outfits worth wearing.`);
+  const misdescribed = [];
+  const outfits = chosen.map((pick) => {
+    const outfit = byHandle.get(pick.id);
+    const name = String(pick.name || "").trim().slice(0, 60);
+    const why = String(pick.why || "").trim().slice(0, 240);
+    const claimed = unsupportedColors(why, outfit.pieces);
+    if (claimed.length) misdescribed.push(`${pick.id} mentions ${claimed.join(" and ")}`);
+    return {
+      ids: outfit.ids, genre: names.get(String(pick.genre).trim().toLowerCase()),
+      name: name && !unsupportedColors(name, outfit.pieces).length ? name : plainName(outfit.pieces),
+      why: claimed.length ? "" : why, palette: outfit.palette, note: outfit.note, score: outfit.score,
+    };
+  });
+  if (checkReasons && misdescribed.length) throw new Error(`Describe only colors the outfit's pieces have: ${misdescribed.join("; ")}.`);
+  const used = new Set(outfits.map((outfit) => outfit.genre));
+  return { genres: genres.filter((genre) => used.has(genre.name)), outfits };
 }

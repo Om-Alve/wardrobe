@@ -248,6 +248,9 @@
 .stylist-look-copy > p { margin: 0 0 12px; color: #4e4b47; font-size: 13px; line-height: 1.5; }
 .stylist-garment-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .stylist-garment-list span { border: 1px solid var(--line); padding: 6px 8px; color: var(--ink); font-size: 11px; }
+.stylist-palette { display: flex; align-items: center; gap: 4px; margin-top: 12px; color: var(--muted); font-size: 11px; }
+.stylist-palette span:last-child { margin-left: 5px; }
+.stylist-swatch { display: inline-block; width: 15px; height: 15px; border: 1px solid rgba(0, 0, 0, .12); }
 .stylist-batch { display: flex; flex-direction: column; gap: 12px; }
 .stylist-batch + .stylist-batch { margin-top: 18px; }
 .stylist-batch-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding-bottom: 2px; }

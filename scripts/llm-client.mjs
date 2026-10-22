@@ -84,5 +84,11 @@ export async function chatJson({ key, baseUrl, model, prompt, image, mime = "ima
   if (!text) throw new Error("The LLM returned no answer.");
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   try { return JSON.parse(trimmed); }
-  catch { throw new Error("The LLM did not return valid JSON. Try a model that follows JSON instructions."); }
+  catch {
+    // Some answers wrap the object in a sentence; read just the object before giving up.
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    try { if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1)); } catch {}
+    throw new Error("The LLM did not return valid JSON. Try a model that follows JSON instructions.");
+  }
 }

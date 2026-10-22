@@ -7,7 +7,6 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import sharp from "sharp";
 import { stylistApi } from "./stylist-api.mjs";
-import { relevantPalettes } from "./stylist-core.mjs";
 
 const workspace = await mkdtemp(path.join(tmpdir(), "wardrobe-stylist-"));
 const realFetch = globalThis.fetch;
@@ -83,7 +82,6 @@ try {
   }
   await writeFile(path.join(dataDir, "library.json"), JSON.stringify(items));
   await writeFile(path.join(dataDir, "model-reference.png"), png);
-  assert.equal(relevantPalettes(items).length, 10);
 
   globalThis.fetch = async (address, options) => {
     const url = String(address);

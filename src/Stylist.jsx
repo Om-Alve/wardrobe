@@ -190,6 +190,11 @@ function LookCard({ look, items, trip, setup, busy, wears, revision, setRevision
           </>}
           <p>{look.reason}</p>
           <div className="stylist-garment-list">{garments.map((item) => <span key={item.id}>{item.name}</span>)}</div>
+          {/* Palettes saved before dictionary matching were nearest guesses, not matches; only matches carry a distance. */}
+          {look.palette?.distance !== undefined && <div className="stylist-palette" title={`Follows combination ${look.palette.id} in Sanzo Wada's Dictionary of Colour Combinations`}>
+            {look.palette.colors.map((color) => <span className="stylist-swatch" key={color.hex} title={color.name} style={{ background: color.hex }} />)}
+            <span>Wada {look.palette.id}</span>
+          </div>}
           {look.weather && !grouped && <p className="stylist-small">Conditions: {look.weather}</p>}
           {lastWear && !wornToday && <p className="stylist-small">Last worn {lastWear.date}</p>}
           {warnings.map((warning) => <p className="stylist-warning" key={warning}>{warning}</p>)}

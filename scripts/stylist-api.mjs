@@ -4,11 +4,11 @@ import path from "node:path";
 import sharp from "sharp";
 import { deriveFeedback, signature, today } from "./feedback.mjs";
 import { describeItem, normalizeAttributes } from "./garment-attributes.mjs";
-import { assignHandles, buildShortlist, candidateLine, describePlan, enumerateLooks, partLabel, scoreLook, singleChanges, unsupportedColors, validatePicks, validatePlan } from "./outfit-engine.mjs";
-import { eligibleItems, PACK_STATES, relevantPalettes, validateLook, warningsFor } from "./stylist-core.mjs";
+import { assignHandles, buildShortlist, candidateLine, describePlan, enumerateLooks, mmrSelect, partLabel, scoreLook, shuffle, singleChanges, unsupportedColors, validatePicks, validatePlan } from "./outfit-engine.mjs";
+import { colorHarmony, eligibleItems, PACK_STATES, validateLook, warningsFor } from "./stylist-core.mjs";
 import { chatJson, imageSettings, llmSettings } from "./llm-client.mjs";
 import { attributeOptions, DEFAULT_OCCASIONS, historyOccasions, normalizeCandidates, rankPurchases, wardrobeCoverage } from "./buy-next.mjs";
-import { allOutfits, finishOutfit, librarySignature, readAssignments, validateGenres } from "./lookbook.mjs";
+import { allOutfits, librarySignature, readCuration } from "./lookbook.mjs";
 import { readProfile } from "./profile-api.mjs";
 import { profileScore, profileSummary } from "./profile.mjs";
 
@@ -26,7 +26,7 @@ const PLAN_FIELDS = `- formality: [lowest, highest] on the 1-5 scale (1 athletic
 - include: handles of pieces the user explicitly asks to wear, otherwise an empty list.
 - exclude: handles of pieces the user explicitly rules out, otherwise an empty list.`;
 const PLAN_GUIDANCE = `Set one plan for this request from the occasion, the conditions, and the user's request.\n${PLAN_FIELDS}`;
-const STYLING_GUIDANCE = "Each item lists its colors (lightness, temperature, and whether each is a base neutral, earth neutral, or accent), formality from 1 (athletic) to 5 (formal), warmth from 0 (hot weather) to 4 (cold weather), and its fabric, pattern, and fit when known. Build from the bottoms and top first. Let base and earth neutrals carry most of the outfit and use at most two accent colors. When pieces share a color family, step the lightness clearly or vary the texture so they do not read as a near miss. Wear at most one statement piece and at most two patterns, at different scales. Tuck shirts that have tails. Add a bag or watch only when it serves the occasion or was requested; accessories do not define the clothing colors. If the wardrobe lacks a piece the occasion needs, leave that slot out and say what is missing in the reason. Use Wada combinations only as loose color inspiration. In the reason, describe the actual garment colors and why the pieces work together; do not cite palette numbers or claim colors the outfit does not contain.";
+const STYLING_GUIDANCE = "Each item lists its colors (lightness, temperature, and whether each is a base neutral, earth neutral, or accent), formality from 1 (athletic) to 5 (formal), warmth from 0 (hot weather) to 4 (cold weather), and its fabric, pattern, and fit when known. Build from the bottoms and top first. Let base and earth neutrals carry most of the outfit and use at most two accent colors. When pieces share a color family, step the lightness clearly or vary the texture so they do not read as a near miss. Wear at most one statement piece and at most two patterns, at different scales. Tuck shirts that have tails. Add a bag or watch only when it serves the occasion or was requested; accessories do not define the clothing colors. If the wardrobe lacks a piece the occasion needs, leave that slot out and say what is missing in the reason. A Wada number marks an outfit whose colors follow a combination from Sanzo Wada's Dictionary of Colour Combinations, which is strong evidence they work together. In the reason, describe the actual garment colors and why the pieces work together; do not cite palette numbers or claim colors the outfit does not contain.";
 
 function planLine(item, handleOf) {
   const { formality, warmth } = normalizeAttributes(item.attributes, item.part);
@@ -89,7 +89,15 @@ async function askModel({ key, baseUrl, model, prompt, shape, onProgress, signal
 async function askUntilValid({ check, failure, onRetry, prompt, ...request }) {
   let feedback = "";
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const raw = await askModel({ ...request, prompt: feedback ? `${prompt}\nYour previous answer was rejected: ${feedback} Answer again.` : prompt });
+    let raw;
+    try { raw = await askModel({ ...request, prompt: feedback ? `${prompt}\nYour previous answer was rejected: ${feedback} Answer again.` : prompt }); }
+    catch (error) {
+      // A malformed answer is worth one more ask; timeouts and provider errors are not.
+      if (attempt || !/valid JSON/.test(error.message)) throw error;
+      feedback = "It was not valid JSON. Return only the JSON object.";
+      onRetry?.();
+      continue;
+    }
     try { return check(raw, attempt); }
     catch (error) {
       if (attempt) throw bad(`${failure}: ${error.message}`, 502);
@@ -181,46 +189,40 @@ export function stylistApi(options = {}) {
     return { hasLlm: llm().configured, hasImageKey: Boolean(image().key), hasReference };
   };
 
-  // Builds the lookbook: every outfit the wardrobe makes, sorted by the model into genres it names for this wardrobe.
+  // Lookbooks saved by an earlier build, which listed every combination, are rebuilt in the curated form.
+  const LOOKBOOK_VERSION = 2;
+  // Builds the lookbook: code ranks every outfit by style and by Sanzo Wada's dictionary, and the model picks the ones worth wearing.
   let lookbookRun = null;
   async function buildLookbook() {
     const items = await library();
     const state = await load();
     const profile = await readProfile(path.resolve(root, setting("WARDROBE_DATA_DIR", "data")));
     const wearer = profileSummary(profile);
-    const outfits = allOutfits(items, { profile, hidden: deriveFeedback(state, items).rejectedSets });
-    if (!outfits.length) throw bad("Add at least one top and one bottom to build outfits.", 422);
-    const { handleOf, sorted } = assignHandles(items);
-    outfits.forEach((outfit, index) => { outfit.handle = `K${index + 1}`; });
-    const line = (outfit) => `${outfit.handle}: ${outfit.ids.map((id) => handleOf.get(id)).join(" + ")}${outfit.note ? ` (${outfit.note.toLowerCase()})` : ""}`;
-    const legend = sorted.filter((item) => item.part !== "accessories_up").map((item) => describeItem(item, handleOf.get(item.id))).join("\n");
-    const model = setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini")));
-    const genres = await askUntilValid({
-      ...llm(), model, shape: '{"genres":[{"name":"...","description":"..."}]}', failure: "The LLM did not return usable genres", check: validateGenres,
-      prompt: `You are a personal stylist organizing a lookbook of every outfit this wardrobe can make. Define 4 to 7 genres to browse them by: style categories that suit this wardrobe${wearer ? " and its owner" : ""}, each with a short name of one to three words and a one-sentence description. Order them from most casual to most formal.${wearer ? `\n${wearer}` : ""}\n\nWardrobe:\n${legend}\n\nSample outfits:\n${outfits.slice(0, 60).map(line).join("\n")}`,
-    });
-    const genreText = genres.map((genre) => `- ${genre.name}: ${genre.description}`).join("\n");
-    const ask = (list, extra = "") => askModel({
-      ...llm(), model, shape: '{"outfits":[{"id":"K1","genre":"...","name":"..."}]} with every outfit listed',
-      prompt: `Sort each outfit below into the genre it fits best and give it a short name of two to four words that describes its pieces truthfully. Use "skip" as the genre only for combinations whose clothes do not work together, such as clashing formality or colors. A note that an outfit needs other shoes means the wardrobe lacks suitable shoes, not that the clothes clash, so sort it into a genre as usual.${extra}\n\nGenres:\n${genreText}${wearer ? `\n${wearer}` : ""}\n\nWardrobe:\n${legend}\n\nOutfits:\n${list.map(line).join("\n")}`,
-    });
-    const sortBatch = async (batch) => {
-      const first = readAssignments(await ask(batch), batch, genres);
-      if (!first.missing.length) return first.assigned;
-      const rest = batch.filter((outfit) => first.missing.includes(outfit.handle));
-      const second = readAssignments(await ask(rest, " An earlier answer missed these outfits or used a genre that is not listed; answer for each of them."), rest, genres);
-      // Outfits still unsorted after a second ask are kept under Other rather than dropped.
-      return [...first.assigned, ...second.assigned, ...rest.filter((outfit) => second.missing.includes(outfit.handle)).map((outfit) => ({ ...outfit, genre: "Other", name: "" }))];
-    };
-    const batches = Array.from({ length: Math.ceil(outfits.length / 100) }, (_, index) => outfits.slice(index * 100, index * 100 + 100));
-    const placed = (await Promise.all(batches.map(sortBatch))).flat();
     const byId = new Map(items.map((item) => [item.id, item]));
-    const used = new Set(placed.map((outfit) => outfit.genre));
+    const everything = allOutfits(items, { profile, hidden: deriveFeedback(state, items).rejectedSets }).map((outfit) => {
+      const pieces = outfit.ids.map((id) => byId.get(id));
+      const color = colorHarmony(pieces);
+      return { ...outfit, pieces, palette: color.palette, score: outfit.score + color.score };
+    });
+    if (!everything.length) throw bad("Add at least one top and one bottom to build outfits.", 422);
+    // A varied, shuffled shortlist, so the stylist judges a broad set without favoring the top of the list.
+    const shortlist = shuffle(mmrSelect(everything, 80));
+    shortlist.forEach((outfit, index) => { outfit.handle = `K${index + 1}`; });
+    const { handleOf, sorted } = assignHandles(items);
+    // Pieces are spelled out by name: with dozens of candidates, short handles alone get mixed up between lines.
+    const line = (outfit) => `${outfit.handle}: ${outfit.pieces.map((piece) => piece.name).join(" + ")}${outfit.palette ? ` (Wada #${outfit.palette.id})` : ""}${outfit.note ? ` (${outfit.note.toLowerCase()})` : ""}`;
+    const legend = sorted.filter((item) => item.part !== "accessories_up").map((item) => describeItem(item, handleOf.get(item.id))).join("\n");
+    const fewest = Math.min(8, shortlist.length);
+    const curated = await askUntilValid({
+      ...llm(), model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
+      failure: "The LLM did not return a usable lookbook",
+      shape: '{"genres":[{"name":"...","description":"..."}],"outfits":[{"id":"K1","genre":"...","name":"...","why":"..."}]}',
+      prompt: `You are a personal stylist curating a lookbook from this wardrobe. The candidates below are outfits its pieces make. A Wada number marks one whose colors follow a combination from Sanzo Wada's Dictionary of Colour Combinations, which is strong evidence its colors work together. Choose the outfits worth wearing, between ${fewest} and 30, judging color harmony, formality, proportion, texture, and variety, and leave out the rest. Group your choices into 3 to 6 genres you name for this wardrobe, ordered from most casual to most formal, each with a one-sentence description. Give each chosen outfit a short name of two to four words and one sentence on why it works that mentions only colors its pieces have. A note that an outfit needs other shoes means the wardrobe lacks suitable shoes, not that the clothes clash.${wearer ? `\n${wearer}` : ""}\n\nWardrobe:\n${legend}\n\nCandidates:\n${shortlist.map(line).join("\n")}`,
+      check: (raw, attempt) => readCuration(raw, shortlist, { fewest, checkReasons: attempt === 0 }),
+    });
     const record = {
-      at: new Date().toISOString(), signature: librarySignature(items),
-      // Genres are named before outfits are sorted, so any that end up empty are dropped.
-      genres: [...genres, { name: "Other", description: "Outfits the stylist could not place." }].filter((genre) => used.has(genre.name)),
-      outfits: placed.sort((a, b) => b.score - a.score).map((outfit) => finishOutfit(outfit, byId)),
+      version: LOOKBOOK_VERSION, at: new Date().toISOString(), signature: librarySignature(items), considered: everything.length,
+      genres: curated.genres, outfits: curated.outfits.sort((a, b) => b.score - a.score),
     };
     await transact((current) => { current.lookbook = record; });
     return record;
@@ -369,7 +371,6 @@ export function stylistApi(options = {}) {
         }
         const anchorId = field(body.anchorId, 80);
         if (anchorId && !available.some((item) => item.id === anchorId)) throw bad("Anchor piece is not available.");
-        const palettes = relevantPalettes(available, 10, anchorId);
         const conditions = field(body.conditions, 300);
         let weather = conditions ? { summary: conditions, source: "manual" } : null;
         if (!weather && trip?.destination) {
@@ -415,7 +416,8 @@ export function stylistApi(options = {}) {
         const shortlist = buildShortlist(pool.map((look) => {
           const history = scoreLook(look, feedback);
           const personal = profileScore(look, profile);
-          return { ...look, score: history.score + personal.score, notes: [...history.notes, ...personal.notes] };
+          const color = colorHarmony(look.pieces);
+          return { ...look, score: history.score + personal.score + color.score, notes: [...(color.palette ? [`Wada #${color.palette.id}`] : []), ...history.notes, ...personal.notes] };
         }));
         const want = Math.min(count, shortlist.length);
         const accessories = new Map(sorted.filter((item) => item.part === "accessories_up").map((item) => [handleOf.get(item.id), item]));
@@ -426,8 +428,7 @@ export function stylistApi(options = {}) {
         const used = new Set(shortlist.flatMap((look) => look.ids));
         const legend = sorted.filter((item) => used.has(item.id)).map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
         const accessoryLegend = [...accessories.values()].map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
-        const palettesText = palettes.map((palette) => `#${palette.id}: ${palette.colors.map((color) => `${color.name} ${color.hex}`).join(", ")}`).join("\n");
-        const pickPrompt = `You are a practical personal stylist. Choose exactly ${want} looks for this request from the candidates below. Every candidate already fits the plan, the weather, and the selected wardrobe, so judge which combine best for the occasion and the user's request: color, texture, proportion, and variety. Choose looks that differ in top or bottom whenever the candidates allow. Each reason is shown on its own card, so describe only that look's pieces and do not compare it with the other picks. Notes after a candidate come from the user's own history. You may add up to two accessories (A handles) to a look when they serve the occasion or the request${required.length ? `; every look must include ${required.map((item) => handleOf.get(item.id)).join(" and ")}` : ""}. ${gaps.length ? "Mention the relevant gap briefly in the reason. " : ""}${STYLING_GUIDANCE}\n\n${context}\nPlan: ${describePlan(plan)}.${gaps.length ? `\nGaps: ${gaps.join(" ")}` : ""}\n\nPieces:\n${legend.join("\n")}\n\nAccessories:\n${accessoryLegend.join("\n") || "none"}\n\nCandidates:\n${shortlist.map((look) => candidateLine(look, handleOf)).join("\n")}\n\nRelevant Wada palettes:\n${palettesText}`;
+        const pickPrompt = `You are a practical personal stylist. Choose exactly ${want} looks for this request from the candidates below. Every candidate already fits the plan, the weather, and the selected wardrobe, so judge which combine best for the occasion and the user's request: color, texture, proportion, and variety. Choose looks that differ in top or bottom whenever the candidates allow. Each reason is shown on its own card, so describe only that look's pieces and do not compare it with the other picks. Notes after a candidate come from the user's own history. You may add up to two accessories (A handles) to a look when they serve the occasion or the request${required.length ? `; every look must include ${required.map((item) => handleOf.get(item.id)).join(" and ")}` : ""}. ${gaps.length ? "Mention the relevant gap briefly in the reason. " : ""}${STYLING_GUIDANCE}\n\n${context}\nPlan: ${describePlan(plan)}.${gaps.length ? `\nGaps: ${gaps.join(" ")}` : ""}\n\nPieces:\n${legend.join("\n")}\n\nAccessories:\n${accessoryLegend.join("\n") || "none"}\n\nCandidates:\n${shortlist.map((look) => candidateLine(look, handleOf)).join("\n")}`;
 
         emit("model");
         const picks = await askUntilValid({
@@ -462,7 +463,7 @@ export function stylistApi(options = {}) {
       }
       if (url.pathname === `${BASE}/lookbook` && req.method === "GET") {
         const lookbook = (await load()).lookbook || null;
-        return send(res, 200, { lookbook, stale: Boolean(lookbook) && lookbook.signature !== librarySignature(await library()) });
+        return send(res, 200, { lookbook, stale: Boolean(lookbook) && (lookbook.version !== LOOKBOOK_VERSION || lookbook.signature !== librarySignature(await library())) });
       }
       if (url.pathname === `${BASE}/lookbook` && req.method === "POST") {
         if (!llm().configured) throw bad("Configure WARDROBE_LLM_API_KEY or WARDROBE_LLM_BASE_URL in .env and restart the app.", 422);

@@ -14,7 +14,6 @@ async function request(path, method = "GET", body) {
   return result;
 }
 
-const LEFT_OUT = "skip";
 const key = (ids) => [...ids].sort().join("|");
 
 function Tile({ outfit, items, saved, wornToday, busy, onSave, onWear, onHide }) {
@@ -26,7 +25,12 @@ function Tile({ outfit, items, saved, wornToday, busy, onSave, onWear, onHide })
       </div>
       <div className="lookbook-copy">
         <strong>{outfit.name}</strong>
+        {outfit.why && <p>{outfit.why}</p>}
         {outfit.note && <small>{outfit.note}</small>}
+        {outfit.palette && <span className="lookbook-palette" title={`Follows combination ${outfit.palette.id} in Sanzo Wada's Dictionary of Colour Combinations`}>
+          {outfit.palette.colors.map((color) => <i key={color.hex} style={{ background: color.hex }} title={color.name} />)}
+          <small>Wada {outfit.palette.id}</small>
+        </span>}
       </div>
       <div className="lookbook-actions">
         <button type="button" aria-label={saved ? "Saved" : "Save outfit"} title={saved ? "Saved" : "Save outfit"} aria-pressed={saved} disabled={busy || saved} onClick={onSave}>
@@ -83,12 +87,10 @@ export function Lookbook({ items, looks, wears, hasLlm, busy, act }) {
 
   const genres = lookbook?.genres || [];
   const outfits = lookbook?.outfits || [];
-  const leftOut = outfits.filter((outfit) => outfit.genre === LEFT_OUT);
   const sections = genres.map((entry) => ({ ...entry, outfits: outfits.filter((outfit) => outfit.genre === entry.name) }));
   const shown = genre === "all" ? sections : sections.filter((entry) => entry.name === genre);
-  const placed = outfits.length - leftOut.length;
 
-  const tile = (outfit, entry, hideable = true) => {
+  const tile = (outfit, entry) => {
     const id = key(outfit.ids);
     const worn = wornToday.get(id);
     return (
@@ -97,7 +99,7 @@ export function Lookbook({ items, looks, wears, hasLlm, busy, act }) {
         saved={savedKeys.has(id)} wornToday={worn}
         onSave={() => act(() => request("/outfits/save", "POST", { garmentIds: outfit.ids, name: outfit.name, genre: entry?.name || "", reason: entry?.description || "" }), "Saved to your outfits.")}
         onWear={() => act(() => worn ? request(`/wears/${worn.id}`, "DELETE") : request("/wears", "POST", { garmentIds: outfit.ids }), worn ? "" : "Logged as worn today.")}
-        onHide={hideable ? async () => { if (await act(() => request("/outfits/hide", "POST", { garmentIds: outfit.ids }), "Hidden. The stylist will avoid this outfit.")) reload().catch(() => {}); } : null}
+        onHide={async () => { if (await act(() => request("/outfits/hide", "POST", { garmentIds: outfit.ids }), "Hidden. The stylist will avoid this outfit.")) reload().catch(() => {}); }}
       />
     );
   };
@@ -108,7 +110,7 @@ export function Lookbook({ items, looks, wears, hasLlm, busy, act }) {
         {error && <p className="stylist-alert error" role="alert">{error}</p>}
         <div className="stylist-empty">
           {!hasLlm ? "Set WARDROBE_LLM_API_KEY or WARDROBE_LLM_BASE_URL in .env to build outfits from your wardrobe."
-            : building ? `Building every outfit your wardrobe can make… ${seconds}s` : error ? "" : "Loading outfits…"}
+            : building ? `Picking the best outfits from your wardrobe… ${seconds}s` : error ? "" : "Loading outfits…"}
         </div>
         {hasLlm && !building && error && <div><button type="button" className="stylist-secondary" onClick={build}>Try again</button></div>}
       </div>
@@ -120,14 +122,14 @@ export function Lookbook({ items, looks, wears, hasLlm, busy, act }) {
       {error && <p className="stylist-alert error" role="alert">{error}</p>}
       <div className="lookbook-bar">
         <span className="stylist-item-count">
-          {building ? `${stale ? "Your wardrobe changed. " : ""}Rebuilding… ${seconds}s` : `${placed} outfits in ${genres.length} genres`}
+          {building ? `${stale ? "Your wardrobe changed. " : ""}Rebuilding… ${seconds}s` : `${outfits.length} outfits picked from ${lookbook.considered || outfits.length} combinations`}
         </span>
         <button type="button" className="stylist-text-button lookbook-rebuild" disabled={building || !hasLlm} onClick={build}>
           <ArrowClockwise size={13} aria-hidden="true" /> Rebuild
         </button>
       </div>
       <nav className="lookbook-genres" aria-label="Filter outfits by genre">
-        <button type="button" className={genre === "all" ? "active" : ""} onClick={() => setGenre("all")}>All<span>{placed}</span></button>
+        <button type="button" className={genre === "all" ? "active" : ""} onClick={() => setGenre("all")}>All<span>{outfits.length}</span></button>
         {sections.map((entry) => (
           <button type="button" key={entry.name} className={genre === entry.name ? "active" : ""} onClick={() => setGenre(entry.name)}>
             {entry.name}<span>{entry.outfits.length}</span>
@@ -141,12 +143,6 @@ export function Lookbook({ items, looks, wears, hasLlm, busy, act }) {
           <div className="lookbook-grid">{entry.outfits.map((outfit) => tile(outfit, entry))}</div>
         </section>
       ))}
-      {genre === "all" && leftOut.length > 0 && (
-        <details className="lookbook-section lookbook-left-out">
-          <summary>Left out by the stylist <span>{leftOut.length}</span></summary>
-          <div className="lookbook-grid">{leftOut.map((outfit) => tile(outfit, null, false))}</div>
-        </details>
-      )}
     </div>
   );
 }

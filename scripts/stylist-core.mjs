@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { colorProfile, lab } from "./garment-attributes.mjs";
+import { deltaE2000 } from "./outfit-engine.mjs";
 
 const colors = JSON.parse(await readFile(new URL("./wada-colors.json", import.meta.url), "utf8"));
 const paletteMap = new Map();
@@ -11,39 +13,54 @@ for (const color of colors) {
 
 const HEX = /^#[0-9a-f]{6}$/i;
 const PARTS = new Set(["upperbody", "lowerbody", "wholebody_up", "accessories_up", "shoes"]);
-const CLOTHING_PARTS = new Set(["upperbody", "lowerbody", "wholebody_up"]);
 export const PACK_STATES = new Set(["planned", "packed", "worn"]);
 
-function rgb(hex) {
-  return [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+// Sanzo Wada's combinations in CIELAB, so garment colors can be matched to them by perceived difference.
+const COMBINATIONS = [...paletteMap.entries()].map(([id, swatches]) => ({ id, swatches: swatches.map((swatch) => ({ ...swatch, lab: lab(swatch.hex) })) }));
+// A garment color within this ΔE2000 of a swatch reads as that swatch. Looser limits let almost any pair match one of 348 combinations.
+const MATCH_DISTANCE = 10;
+const nearest = new Map();
+
+function nearestSwatch(hex, combination) {
+  const key = `${hex}|${combination.id}`;
+  if (!nearest.has(key)) {
+    const color = lab(hex);
+    nearest.set(key, combination.swatches.reduce((best, swatch, index) => {
+      const distance = deltaE2000(color, swatch.lab);
+      return distance < best.distance ? { distance, index } : best;
+    }, { distance: Infinity, index: -1 }));
+  }
+  return nearest.get(key);
 }
 
-function distance(first, second) {
-  const a = rgb(first);
-  const b = rgb(second);
-  return Math.sqrt(a.reduce((sum, value, index) => sum + ((value - b[index]) ** 2), 0));
+// The dictionary combination an outfit's colors follow: every non-neutral garment color close to a swatch, using at least two swatches.
+// Greys, black, and white go with anything, so they never decide a match. Returns null when fewer than two colors or no combination fits.
+export function wadaMatch(pieces) {
+  const colors = [...new Set(pieces.filter((piece) => piece.part !== "accessories_up").map((piece) => piece.color).filter((hex) => HEX.test(hex || "")))]
+    .filter((hex) => colorProfile(hex).chroma >= 8);
+  if (colors.length < 2) return null;
+  let best = null;
+  for (const combination of COMBINATIONS) {
+    const used = new Set();
+    let total = 0;
+    for (const hex of colors) {
+      const { distance, index } = nearestSwatch(hex, combination);
+      if (distance > MATCH_DISTANCE) { total = Infinity; break; }
+      total += distance;
+      used.add(index);
+    }
+    if (total === Infinity || used.size < 2 || (best && total / colors.length >= best.distance)) continue;
+    best = { id: combination.id, colors: combination.swatches.map(({ name, hex }) => ({ name, hex })), distance: total / colors.length };
+  }
+  return best && { ...best, distance: Math.round(best.distance * 10) / 10 };
 }
 
-export function relevantPalettes(items, limit = 10, anchorId = "") {
-  const garmentColors = items
-    .filter((item) => CLOTHING_PARTS.has(item.part))
-    .flatMap((item) => [item.color, item.secondaryColor])
-    .filter((hex) => typeof hex === "string" && HEX.test(hex));
-  if (!garmentColors.length) return [];
-  const anchor = items.find((item) => item.id === anchorId && CLOTHING_PARTS.has(item.part));
-  const anchorColors = [anchor?.color, anchor?.secondaryColor].filter((hex) => typeof hex === "string" && HEX.test(hex));
-  return [...paletteMap.entries()].map(([id, swatches]) => ({
-    id,
-    colors: swatches,
-    score: (anchorColors.length ? Math.min(...anchorColors.flatMap((hex) => swatches.map((swatch) => distance(hex, swatch.hex)))) * 2 : 0)
-      + garmentColors
-      .map((hex) => Math.min(...swatches.map((swatch) => distance(hex, swatch.hex))))
-      .sort((a, b) => a - b)
-      .slice(0, Math.min(3, garmentColors.length))
-      .reduce((sum, value) => sum + value, 0)
-      - swatches.filter((swatch) => garmentColors.some((hex) => distance(hex, swatch.hex) < 65)).length * 20,
-  })).sort((a, b) => a.score - b.score).slice(0, limit)
-    .map(({ id, colors: paletteColors }) => ({ id, colors: paletteColors }));
+// Ranking weight for color: a close dictionary match counts most, a single accent over neutrals is safe, other color mixes are unproven.
+export function colorHarmony(pieces) {
+  const match = wadaMatch(pieces);
+  if (match) return { score: 0.2 - match.distance / 50, palette: match };
+  const colored = new Set(pieces.filter((piece) => piece.part !== "accessories_up" && HEX.test(piece.color || "") && colorProfile(piece.color).chroma >= 8).map((piece) => piece.color));
+  return { score: colored.size < 2 ? 0.1 : 0, palette: null };
 }
 
 export function eligibleItems(trip, library) {
@@ -64,7 +81,7 @@ export function validateLook(value, availableItems) {
       || counts.wholebody_up > 1 || counts.accessories_up > 2 || counts.shoes > 1) {
     throw new Error("A look needs one top and one bottom, with at most one layer, two accessories, and pair of shoes.");
   }
-  const palette = relevantPalettes(garments, 1)[0] || null;
+  const palette = wadaMatch(garments);
   return {
     name: String(value.name || "New look").trim().slice(0, 80) || "New look",
     reason: String(value.reason || "").trim().slice(0, 500),

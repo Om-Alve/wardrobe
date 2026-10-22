@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { stylistApi } from "./stylist-api.mjs";
-import { relevantPalettes } from "./stylist-core.mjs";
+import { colorProfile } from "./garment-attributes.mjs";
 
 const items = [
   { id: "tee", name: "White cotton T-shirt", part: "upperbody", color: "#efefea", tags: ["t-shirt"], attributes: { category: "tshirt", formality: 2, warmth: 1 } },
@@ -77,13 +78,6 @@ try {
   const dataDir = path.join(workspace, "data");
   await mkdir(dataDir);
   await writeFile(path.join(dataDir, "library.json"), JSON.stringify(items));
-  const core = items.filter((item) => ["tee", "cargo"].includes(item.id));
-  const baseline = relevantPalettes(core, 10);
-  const [bag, watch] = items.filter((item) => item.part === "accessories_up");
-  assert.deepEqual(relevantPalettes([...core, bag, watch], 10), baseline,
-    "An unused bag or watch must not change the clothing palette shortlist.");
-  assert.deepEqual(relevantPalettes([...core, bag], 10, "bag"), baseline,
-    "Anchoring a bag must not turn its color into a clothing color.");
 
   globalThis.fetch = async (address, options) => {
     assert.match(String(address), /\/chat\/completions$/);
@@ -91,7 +85,8 @@ try {
     assert.ok(answer, "The model received more requests than this case allows.");
     const prompt = JSON.parse(options.body).messages[0].content;
     prompts.push(prompt);
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(answer(prompt)) } }] }),
+    const reply = answer(prompt);
+    return new Response(JSON.stringify({ choices: [{ message: { content: typeof reply === "string" ? reply : JSON.stringify(reply) } }] }),
       { headers: { "Content-Type": "application/json" } });
   };
   const plugin = stylistApi({ env: { WARDROBE_LLM_API_KEY: "eval-key", WARDROBE_DATA_DIR: "data" } });
@@ -108,8 +103,7 @@ try {
   assert.equal(dinner.body.length, 1, "When fewer distinct looks fit than requested, the stylist returns fewer instead of padding.");
   assert.deepEqual(dinner.body[0].garmentIds, ["dress-shirt", "formal-trousers"]);
   assert.deepEqual(dinner.body[0].plan.formality, [4, 5], "The look keeps the plan it was built from.");
-  assert.equal(dinner.body[0].palette.id, relevantPalettes(items.filter((item) => dinner.body[0].garmentIds.includes(item.id)), 1)[0].id,
-    "The shown Wada palette must be chosen for the actual clothes in the look.");
+  assert.equal(dinner.body[0].palette, null, "A light blue shirt on black trousers is one color over a neutral, so no dictionary combination is claimed.");
 
   queue(plan(HOT), pickBy((list) => list.slice(0, 2)));
   const walk = await suggest({ count: 2, occasion: "Sightseeing", conditions: "Sunny, 32°C", selectedItemIds: ["tee", "hoodie", "cargo", "relaxed-trousers", "flannel", "sneakers"] });
@@ -130,6 +124,11 @@ try {
   const replanned = await suggest({ count: 1, occasion: "Errands" });
   assert.equal(replanned.status, 201, JSON.stringify(replanned.body));
   assert.match(prompts[1], /Your previous answer was rejected: Return "plan"/, "An answer without a plan is sent back with the reason.");
+
+  queue(plan(CASUAL), () => "Here are my picks: {\"picks\": [", pickBy((list) => list.slice(0, 1)));
+  const malformed = await suggest({ count: 1, occasion: "Errands" });
+  assert.equal(malformed.status, 201, "A malformed answer gets one more ask instead of failing the request.");
+  assert.match(prompts[2], /It was not valid JSON/);
 
   queue(plan(CASUAL), () => ({ picks: [{ look: "L999", name: "Missing", reason: "Not listed." }] }), pickBy((list) => list.slice(0, 1)));
   const repicked = await suggest({ count: 1, occasion: "Errands" });
@@ -274,32 +273,28 @@ try {
   const lookbookPlugin = stylistApi({ env: { WARDROBE_LLM_API_KEY: "eval-key", WARDROBE_DATA_DIR: "lookbook-data" } });
   await lookbookPlugin.configResolved({ root: workspace });
   lookbookPlugin.configureServer({ middlewares: { use(value) { handler = value; } } });
-  const outfitList = (prompt) => {
-    const names = new Map([...handles(prompt)].map(([itemName, handle]) => [handle, itemName]));
-    return [...prompt.split("\nOutfits:\n")[1].matchAll(/^(K\d+): ([^(\n]+?)(?: \((.*)\))?$/gm)].map((match) => ({ id: match[1], names: match[2].split(" + ").map((handle) => names.get(handle)), note: match[3] || "" }));
-  };
-  const sortOutfits = (skipOne) => (prompt) => ({
-    outfits: outfitList(prompt).filter((outfit, index) => !(skipOne && index === 0)).map((outfit) => ({
-      id: outfit.id,
-      genre: outfit.names.includes(name("hoodie")) && outfit.names.includes(name("formal-trousers")) ? "skip" : outfit.names.includes(name("formal-trousers")) ? "Dressy" : "Casual",
-      name: outfit.names.includes(name("dress-shirt")) && outfit.names.includes(name("cargo")) ? "Purple haze" : "Named look",
+  const outfitList = (prompt) => [...prompt.split("\nCandidates:\n")[1].matchAll(/^(K\d+): ([^(\n]+?)(?: \((.*)\))?$/gm)]
+    .map((match) => ({ id: match[1], names: match[2].split(" + "), line: match[0] }));
+  const curate = (why) => (prompt) => ({
+    genres: [{ name: "Casual", description: "Everyday." }, { name: "Athleisure", description: "Sporty." }, { name: "Dressy", description: "Evenings." }],
+    outfits: outfitList(prompt).filter((outfit) => !(outfit.names.includes(name("hoodie")) && outfit.names.includes(name("formal-trousers")))).slice(0, 10).map((outfit, index) => ({
+      id: outfit.id, genre: outfit.names.includes(name("formal-trousers")) ? "Dressy" : "Casual",
+      name: index === 0 ? "Purple haze" : "Named look", why: index === 1 ? why : "Easy and calm.",
     })),
   });
-  queue(
-    () => ({ genres: [{ name: "Casual", description: "Everyday." }, { name: "Athleisure", description: "Sporty." }, { name: "Dressy", description: "Evenings." }] }),
-    sortOutfits(true),
-    sortOutfits(false),
-  );
+  queue(curate("A purple accent lifts it."), curate("Easy and calm."));
   const built = await invoke("/lookbook", "POST");
   assert.equal(built.status, 200, JSON.stringify(built.body));
   const book = built.body.lookbook;
-  assert.equal(book.outfits.length, 18, "Every top and bottom, with and without the layer, becomes an outfit.");
-  assert.match(prompts[2], /An earlier answer missed these outfits/, "Outfits the model missed are asked about again.");
-  assert.deepEqual(book.genres.map((genre) => genre.name), ["Casual", "Dressy"], "Genres that end up empty are dropped.");
-  assert.ok(book.outfits.filter((outfit) => outfit.genre === "skip").length === 2, "Combinations the model leaves out are kept as left out, not discarded.");
-  const formalNoShoes = book.outfits.find((outfit) => outfit.ids.length === 2 && outfit.ids.includes("dress-shirt") && outfit.ids.includes("formal-trousers"));
-  assert.equal(formalNoShoes.note, "Needs dressier shoes", "Running sneakers are not paired with dress clothes; the outfit says what it needs.");
-  assert.ok(book.outfits.filter((outfit) => outfit.ids.includes("dress-shirt") && outfit.ids.includes("cargo")).every((outfit) => outfit.name !== "Purple haze"), "A name claiming a color the outfit lacks is replaced.");
+  assert.equal(book.considered, 18, "Every top and bottom, with and without the layer, is considered.");
+  assert.equal(book.outfits.length, 10, "Only the outfits the stylist picks make the lookbook.");
+  const candidateLines = outfitList(prompts[0]);
+  assert.ok(candidateLines.some((outfit) => outfit.names.includes(name("dress-shirt")) && outfit.names.includes(name("formal-trousers")) && /needs dressier shoes/.test(outfit.line)),
+    "Running sneakers are not paired with dress clothes; the candidate says what it needs.");
+  assert.match(prompts[1], /Describe only colors the outfit's pieces have: K\d+ mentions purple/, "A reason claiming a color the outfit lacks is sent back once.");
+  assert.deepEqual(book.genres.map((genre) => genre.name), ["Casual", "Dressy"], "Genres the stylist ends up not using are dropped.");
+  assert.ok(!book.outfits.some((outfit) => outfit.name === "Purple haze"), "A name claiming a color the outfit lacks is replaced.");
+  assert.ok(book.outfits.every((outfit) => outfit.why === "Easy and calm."));
   assert.equal((await invoke("/lookbook", "GET")).body.stale, false);
   await writeFile(path.join(workspace, "lookbook-data", "library.json"), JSON.stringify([...items, { ...items[0], id: "tee-2", name: "Grey tee", color: "#8a8d90" }]));
   assert.equal((await invoke("/lookbook", "GET")).body.stale, true, "Adding a piece marks the lookbook out of date.");
@@ -320,6 +315,31 @@ try {
   const wore = await invoke("/wears", "POST", { garmentIds: favorite.ids });
   assert.equal(wore.status, 201);
   assert.equal(wore.body.lookId, null, "An outfit can be logged as worn without saving it first.");
+  handler = mainHandler;
+
+  const combinations = new Map();
+  for (const color of JSON.parse(readFileSync(new URL("./wada-colors.json", import.meta.url), "utf8"))) {
+    for (const id of color.combinations) combinations.set(id, [...(combinations.get(id) || []), color]);
+  }
+  const [comboId, [first, second]] = [...combinations].find(([, swatches]) => swatches.length === 2 && swatches.every((swatch) => colorProfile(swatch.hex).chroma >= 20));
+  const dyed = [
+    { id: "wada-top", name: "First shirt", part: "upperbody", color: first.hex, tags: [], attributes: { formality: 2, warmth: 1 } },
+    { id: "grey-top", name: "Grey shirt", part: "upperbody", color: "#808080", tags: [], attributes: { formality: 2, warmth: 1 } },
+    { id: "wada-bottom", name: "Second trousers", part: "lowerbody", color: second.hex, tags: [], attributes: { formality: 2, warmth: 1 } },
+    { id: "black-shoes", name: "Black shoes", part: "shoes", color: "#141414", tags: [], attributes: { formality: 2, warmth: 1 } },
+  ];
+  await mkdir(path.join(workspace, "wada-data"));
+  await writeFile(path.join(workspace, "wada-data", "library.json"), JSON.stringify(dyed));
+  const wadaPlugin = stylistApi({ env: { WARDROBE_LLM_API_KEY: "eval-key", WARDROBE_DATA_DIR: "wada-data" } });
+  await wadaPlugin.configResolved({ root: workspace });
+  wadaPlugin.configureServer({ middlewares: { use(value) { handler = value; } } });
+  queue(plan(CASUAL), pickWith("First shirt", "Second trousers", "Black shoes"));
+  const dyedLook = await suggest({ count: 1, occasion: "Errands", selectedItemIds: dyed.map((item) => item.id) });
+  assert.equal(dyedLook.status, 201, JSON.stringify(dyedLook.body));
+  const dyedLines = candidates(prompts[1]);
+  assert.match(dyedLines.find((entry) => entry.names.includes("First shirt")).notes, new RegExp(`Wada #${comboId}\\b`), "A look in a dictionary combination's colors is marked with it.");
+  assert.doesNotMatch(dyedLines.find((entry) => entry.names.includes("Grey shirt")).notes, /Wada/, "One color over neutrals claims no combination.");
+  assert.equal(dyedLook.body[0].palette.id, comboId, "The saved look keeps the combination its colors follow.");
   handler = mainHandler;
 
   const profileFile = path.join(dataDir, "profile.json");
@@ -355,7 +375,7 @@ try {
   assert.equal(fallback.status, 201, JSON.stringify(fallback.body));
   assert.deepEqual(efforts, ["none", null, "none", null], "A provider that rejects the reasoning setting gets each request again without it.");
 
-  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, what-to-buy order with alternatives, owned twins, and counted reasons, pieces that only work together, anchor over plan includes, stale revisions, re-offered turned-down looks, non-color words, a very large wardrobe, the lookbook with genres, left-out outfits, staleness, saving, hiding, and wears, and chosen-clothes Wada reference.");
+  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, malformed-answer retry, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, what-to-buy order with alternatives, owned twins, and counted reasons, pieces that only work together, anchor over plan includes, stale revisions, re-offered turned-down looks, non-color words, a very large wardrobe, the curated lookbook with genres, checked reasons, staleness, saving, hiding, and wears, and Wada dictionary matches.");
 } finally {
   globalThis.fetch = realFetch;
   await rm(workspace, { recursive: true, force: true });
