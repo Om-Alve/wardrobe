@@ -7,6 +7,16 @@ const PART_NAMES = {
 };
 const PART_ORDER = Object.keys(PART_NAMES);
 const EMPTY_STATE = { trips: [], looks: [], setup: { hasLlm: false, hasImageKey: false, hasReference: false } };
+const SUGGESTION_STAGES = {
+  preparing: "Preparing selected items",
+  weather: "Checking destination weather",
+  model: "Asking the stylist",
+  thinking: "Considering combinations",
+  responding: "Receiving outfit ideas",
+  checking: "Checking garments and colors",
+  retrying: "Refining the suggestions",
+  saving: "Saving draft outfits",
+};
 
 async function request(path, method = "GET", body) {
   const response = await fetch(`/api/stylist${path}`, {
@@ -18,6 +28,49 @@ async function request(path, method = "GET", body) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || "The request failed.");
   return result;
+}
+
+async function requestSuggestions(body, onProgress) {
+  const response = await fetch("/api/stylist/suggest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    throw new Error(result.error || "The suggestion request failed.");
+  }
+  if (!response.body) throw new Error("The server did not provide suggestion progress.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  let looks;
+  const handle = (line) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (event.type === "progress") onProgress(event.stage);
+    if (event.type === "error") throw new Error(event.message);
+    if (event.type === "done") looks = event.looks;
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      pending += decoder.decode(value, { stream: !done });
+      let boundary;
+      while ((boundary = pending.indexOf("\n")) >= 0) {
+        handle(pending.slice(0, boundary));
+        pending = pending.slice(boundary + 1);
+      }
+      if (done) break;
+    }
+    if (pending.trim()) handle(pending);
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally { reader.releaseLock(); }
+  if (!Array.isArray(looks)) throw new Error("The suggestion request ended before outfits were saved.");
+  return looks;
 }
 
 function ItemThumb({ item }) {
@@ -167,6 +220,8 @@ export function Stylist({ items }) {
   const [chosenIds, setChosenIds] = useState(null);
   const [weather, setWeather] = useState(null);
   const [lookFilter, setLookFilter] = useState("all");
+  const [suggestionProgress, setSuggestionProgress] = useState(null);
+  const [suggestionSeconds, setSuggestionSeconds] = useState(0);
 
   const refresh = useCallback(async () => setState(await request("/state")), []);
   useEffect(() => { refresh().catch((failure) => setError(failure.message)); }, [refresh]);
@@ -175,6 +230,11 @@ export function Stylist({ items }) {
     const timer = window.setInterval(() => refresh().catch(() => {}), 2500);
     return () => window.clearInterval(timer);
   }, [state.looks, refresh]);
+  useEffect(() => {
+    if (!suggestionProgress) return undefined;
+    const timer = window.setInterval(() => setSuggestionSeconds(Math.floor((Date.now() - suggestionProgress.startedAt) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [suggestionProgress?.startedAt]);
 
   const act = async (action, success) => {
     setBusy(true); setError(""); setNotice("");
@@ -239,7 +299,14 @@ export function Stylist({ items }) {
             {trip && <p className="stylist-note">Only packed and worn items are available.</p>}
             <form className="stylist-ask-form" onSubmit={async (event) => {
               event.preventDefault();
-              if (await act(() => request("/suggest", "POST", { tripId: trip?.id || null, selectedItemIds: requestItems.map((item) => item.id), count: Number(count), occasion, conditions, brief, anchorId: requestItems.some((item) => item.id === anchorId) ? anchorId : "" }), "Draft looks saved. Revise one or make its photo.")) setLookFilter("drafts");
+              setSuggestionSeconds(0);
+              setSuggestionProgress({ startedAt: Date.now(), stages: [] });
+              const succeeded = await act(() => requestSuggestions({ tripId: trip?.id || null, selectedItemIds: requestItems.map((item) => item.id), count: Number(count), occasion, conditions, brief, anchorId: requestItems.some((item) => item.id === anchorId) ? anchorId : "" }, (stage) => {
+                setSuggestionProgress((current) => current && current.stages.at(-1) !== stage
+                  ? { ...current, stages: [...current.stages, stage] } : current);
+              }), "Draft looks saved. Revise one or make its photo.");
+              setSuggestionProgress(null);
+              if (succeeded) setLookFilter("drafts");
             }}>
               <details className="stylist-item-picker"><summary>Choose items for this request <span>{requestItems.length} of {available.length} selected</span></summary>
                 <div className="stylist-picker-actions"><button type="button" className="stylist-text-button" onClick={() => setChosenIds(null)}>Select all available</button></div>
@@ -257,7 +324,12 @@ export function Stylist({ items }) {
               {trip?.destination && <div className="stylist-weather-row"><button type="button" className="stylist-secondary" disabled={busy} onClick={lookupWeather}>Check destination weather</button>{weather && <span>{weather.unavailable ? "Forecast is outside the available range. Enter conditions below." : weather.summary}</span>}</div>}
               <label>Weather or conditions override<input value={conditions} onChange={(event) => setConditions(event.target.value)} placeholder="Warm days, cool evenings, possible rain…" /></label>
               <label>What would you like to wear?<textarea value={brief} onChange={(event) => setBrief(event.target.value)} rows={3} placeholder="I want relaxed looks that work for walking all day and one nicer dinner." /></label>
-              <div className="stylist-submit-row"><button className="stylist-primary" disabled={busy || !state.setup.hasLlm || !requestItems.some((item) => item.part === "upperbody") || !requestItems.some((item) => item.part === "lowerbody")}>Suggest outfits</button></div>
+              <div className="stylist-submit-row"><button className="stylist-primary" disabled={busy || !state.setup.hasLlm || !requestItems.some((item) => item.part === "upperbody") || !requestItems.some((item) => item.part === "lowerbody")}>{suggestionProgress ? "Suggesting…" : "Suggest outfits"}</button></div>
+              {suggestionProgress && <div className="stylist-suggest-progress">
+                <div className="stylist-progress-heading"><span className="stylist-progress-spinner" aria-hidden="true" /><strong role="status" aria-live="polite">{SUGGESTION_STAGES[suggestionProgress.stages.at(-1)] || "Starting the stylist"}</strong><span className="stylist-progress-time" aria-hidden="true">{Math.floor(suggestionSeconds / 60)}:{String(suggestionSeconds % 60).padStart(2, "0")}</span></div>
+                <div className="stylist-progress-track" aria-hidden="true"><span /></div>
+                <ol className="stylist-progress-steps">{suggestionProgress.stages.slice(-4).map((stage, index, recent) => <li key={`${stage}-${index}`} className={index === recent.length - 1 ? "current" : "complete"}>{SUGGESTION_STAGES[stage]}</li>)}</ol>
+              </div>}
             </form>
           </section>
           <section className="stylist-results">

@@ -51,11 +51,12 @@ async function atomicJson(file, value) {
   await rename(temporary, file);
 }
 
-async function requestLooks({ key, baseUrl, model, prompt, count }) {
+async function requestLooks({ key, baseUrl, model, prompt, count, onProgress, signal }) {
   let parsed;
   try {
-    parsed = await chatJson({ key, baseUrl, model, prompt: `${prompt}\nReturn JSON in this exact shape: {"looks":[{"name":"...","reason":"...","occasion":"...","garmentIds":["item-id"],"paletteId":1}]}. Include exactly ${count} looks.` });
+    parsed = await chatJson({ key, baseUrl, model, prompt: `${prompt}\nReturn JSON in this exact shape: {"looks":[{"name":"...","reason":"...","occasion":"...","garmentIds":["item-id"],"paletteId":1}]}. Include exactly ${count} looks.`, timeout: 300000, onProgress, signal });
   } catch (error) {
+    if (error.name === "TimeoutError") throw bad("The LLM took more than five minutes. Try fewer looks or a smaller item selection.", 504);
     throw bad(`The LLM could not suggest outfits: ${error.message}`, 502);
   }
   if (!Array.isArray(parsed.looks) || parsed.looks.length !== count) throw bad("The LLM returned the wrong number of looks.", 502);
@@ -255,10 +256,24 @@ export function stylistApi(options = {}) {
         return send(res, 200, { deleted: true });
       }
       if (url.pathname === `${BASE}/suggest` && req.method === "POST") {
+        const streaming = req.headers?.accept?.includes("application/x-ndjson");
+        const emit = (stage) => {
+          if (!streaming) return;
+          if (!res.headersSent) {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+            res.setHeader("Cache-Control", "no-store");
+            res.flushHeaders?.();
+          }
+          res.write(`${JSON.stringify({ type: "progress", stage })}\n`);
+        };
+        const disconnected = new AbortController();
+        res.on?.("close", () => { if (!res.writableEnded) disconnected.abort(); });
         const body = await input(req);
         const count = Number(body.count);
         if (!Number.isInteger(count) || count < 1 || count > 6) throw bad("Choose 1 to 6 looks.");
         if (!llm().configured) throw bad("Configure WARDROBE_LLM_API_KEY or WARDROBE_LLM_BASE_URL in .env and restart the app.", 422);
+        emit("preparing");
         const state = await load();
         const trip = body.tripId ? state.trips.find((entry) => entry.id === body.tripId) : null;
         if (body.tripId && !trip) throw bad("Trip not found.", 404);
@@ -277,6 +292,7 @@ export function stylistApi(options = {}) {
         const conditions = field(body.conditions, 300);
         let weather = conditions ? { summary: conditions, source: "manual" } : null;
         if (!weather && trip?.destination) {
+          emit("weather");
           try { weather = await forecastFor(trip.destination, trip.startDate, trip.endDate); }
           catch { weather = null; }
         }
@@ -287,13 +303,17 @@ export function stylistApi(options = {}) {
         const prompt = `You are a practical personal stylist. Propose exactly ${count} distinct outfits using ONLY the item IDs listed below. Every look needs exactly one upperbody and one lowerbody item, with at most one wholebody_up, two accessories_up, and one shoes item. Include the anchor item ${anchorId || "(none specified)"} in every look if one is specified. Keep outfits wearable for the occasion, weather, and actual garment tags. Vary garments across looks. Use Sanzo Wada's color combinations as inspiration, not a rigid match; black, white, cream, grey, and brown may serve as neutrals. Pick paletteId from the reference combinations below. Explain the color and practical clothing fit briefly. Do not invent garments.\n\nOccasion: ${occasion || "everyday"}\nConditions: ${weather?.summary || "not supplied; do not assume a forecast"}\nUser request: ${brief || "comfortable, considered outfits"}\n\nAvailable items:\n${itemsText}\n\nRelevant Wada palettes:\n${palettesText}`;
         let raw;
         let ideas;
+        const deadline = AbortSignal.timeout(300000);
         for (let attempt = 0; attempt < 2; attempt += 1) {
+          emit("model");
           raw = await requestLooks({
             ...llm(),
             model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
             prompt: attempt ? `${prompt}\nYour previous answer had invalid or repeated item combinations. Follow all constraints exactly.` : prompt,
-            count,
+            count, onProgress: streaming ? emit : undefined,
+            signal: AbortSignal.any([deadline, disconnected.signal]),
           });
+          emit("checking");
           try {
             ideas = raw.map((entry) => validateLook(entry, available, palettes));
             if (anchorId && ideas.some((entry) => !entry.garmentIds.includes(anchorId))) throw new Error("Anchor item missing.");
@@ -302,6 +322,7 @@ export function stylistApi(options = {}) {
             break;
           } catch (error) {
             if (attempt) throw bad(`The LLM did not return usable looks: ${error.message}`, 502);
+            emit("retrying");
           }
         }
         const now = new Date().toISOString();
@@ -312,6 +333,7 @@ export function stylistApi(options = {}) {
           weatherSource: weather?.source || null, image: null, error: null,
           messages: [], date: "", savedAt: null, createdAt: now, updatedAt: now,
         }));
+        emit("saving");
         await transact(async (current) => {
           const currentTrip = trip ? current.trips.find((entry) => entry.id === trip.id) : null;
           if (trip && !currentTrip) throw bad("Trip was deleted.", 409);
@@ -320,6 +342,10 @@ export function stylistApi(options = {}) {
           for (const look of looks) look.warnings = warningsFor(look, currentTrip);
           current.looks.push(...looks);
         });
+        if (streaming) {
+          res.write(`${JSON.stringify({ type: "done", looks })}\n`);
+          return res.end();
+        }
         return send(res, 201, looks);
       }
       const lookMatch = url.pathname.match(/^\/api\/stylist\/looks\/([a-f0-9-]{36})(?:\/(revise|photo|save))?$/);
@@ -432,6 +458,10 @@ export function stylistApi(options = {}) {
       }
       throw bad("Stylist route not found.", 404);
     } catch (error) {
+      if (url.pathname === `${BASE}/suggest` && res.headersSent && req.headers?.accept?.includes("application/x-ndjson")) {
+        if (!res.destroyed) res.write(`${JSON.stringify({ type: "error", message: error.status ? error.message : "Internal stylist error." })}\n`);
+        return res.end();
+      }
       return send(res, error.status || 500, { error: error.status ? error.message : "Internal stylist error." });
     }
   }

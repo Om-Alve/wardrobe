@@ -193,6 +193,22 @@
 .stylist-picker-item img { width: 31px; height: 34px; object-fit: contain; flex: 0 0 auto; }
 .stylist-picker-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stylist-submit-row { display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
+.stylist-suggest-progress { border: 1px solid var(--line); padding: 14px 16px; background: #f7f7f3; }
+.stylist-progress-heading { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.stylist-progress-heading strong { font-weight: 600; }
+.stylist-progress-time { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stylist-progress-spinner { width: 13px; height: 13px; flex: 0 0 auto; border: 2px solid #c9d3c4; border-top-color: var(--accent); border-radius: 50%; animation: stylist-spin .9s linear infinite; }
+.stylist-progress-track { height: 3px; margin: 12px 0; overflow: hidden; background: #dfe4da; }
+.stylist-progress-track span { display: block; width: 32%; height: 100%; background: var(--accent); animation: stylist-track 1.7s ease-in-out infinite alternate; }
+.stylist-progress-steps { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 11px; }
+.stylist-progress-steps li::before { content: "✓"; margin-right: 5px; color: var(--accent); }
+.stylist-progress-steps li.current { color: var(--ink); font-weight: 600; }
+.stylist-progress-steps li.current::before { content: "•"; }
+@keyframes stylist-spin { to { transform: rotate(360deg); } }
+@keyframes stylist-track { to { transform: translateX(215%); } }
+@media (prefers-reduced-motion: reduce) {
+  .stylist-progress-spinner, .stylist-progress-track span { animation: none; }
+}
 .stylist-results { display: flex; flex-direction: column; gap: 17px; }
 .stylist-results > .stylist-section-heading { margin: 4px 0 0; }
 .stylist-look-filters { display: flex; gap: 0; border-bottom: 1px solid var(--line); }

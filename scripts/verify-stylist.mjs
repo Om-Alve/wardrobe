@@ -15,6 +15,7 @@ let handler;
 let imageCalls = 0;
 let responseCalls = 0;
 let returnInvalidFirst = true;
+let failNextSuggestion = false;
 
 const topId = randomUUID();
 const otherTopId = randomUUID();
@@ -34,22 +35,31 @@ function fakeJson(value, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-async function invoke(route, method = "GET", data) {
+async function invoke(route, method = "GET", data, headers = {}) {
   const req = Readable.from(data ? [Buffer.from(JSON.stringify(data))] : []);
   req.url = `/api/stylist${route}`;
   req.method = method;
+  req.headers = headers;
   let status = 200;
   let bytes = Buffer.alloc(0);
+  let headersSent = false;
+  const responseHeaders = {};
   const res = {
-    setHeader() {},
+    setHeader(name, value) { responseHeaders[name.toLowerCase()] = value; },
+    get headersSent() { return headersSent; },
+    flushHeaders() { headersSent = true; },
+    write(value) { headersSent = true; bytes = Buffer.concat([bytes, Buffer.from(value)]); },
     get statusCode() { return status; },
     set statusCode(value) { status = value; },
-    end(value) { bytes = Buffer.isBuffer(value) ? value : Buffer.from(value || ""); },
+    end(value) { headersSent = true; if (value) bytes = Buffer.concat([bytes, Buffer.from(value)]); },
   };
   await handler(req, res, () => { throw new Error(`Unmatched route: ${route}`); });
   return {
     status,
-    body: route.startsWith("/images/") && status === 200 ? bytes : JSON.parse(bytes.toString("utf8")),
+    body: route.startsWith("/images/") && status === 200 ? bytes
+      : responseHeaders["content-type"]?.includes("application/x-ndjson")
+        ? bytes.toString("utf8").trim().split("\n").map((line) => JSON.parse(line))
+        : JSON.parse(bytes.toString("utf8")),
   };
 }
 
@@ -89,6 +99,10 @@ try {
     }
     if (url.endsWith("/chat/completions")) {
       responseCalls += 1;
+      if (failNextSuggestion) {
+        failNextSuggestion = false;
+        throw new DOMException("The operation timed out.", "TimeoutError");
+      }
       assert.equal(options.headers.Authorization, url.startsWith("http://localhost:11434") ? undefined : "Bearer stylist-key");
       const body = JSON.parse(options.body);
       const prompt = body.messages[0].content;
@@ -96,11 +110,25 @@ try {
       const isRevision = prompt.startsWith("Revise this single outfit");
       const chosenTop = returnInvalidFirst && !isRevision ? otherTopId : topId;
       returnInvalidFirst = false;
-      return fakeJson({ choices: [{ message: { content: JSON.stringify({ looks: [{
+      const answer = JSON.stringify({ looks: [{
         name: isRevision ? "Revised Kyoto look" : "Kyoto walking look",
         reason: "Olive and blue work with a restrained dark base.",
         occasion: "Sightseeing", garmentIds: [chosenTop, bottomId, shoeId], paletteId,
-      }] }) } }] });
+      }] });
+      if (body.stream) {
+        const midpoint = Math.floor(answer.length / 2);
+        const chunks = [
+          `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "considering colors" } }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: answer.slice(0, midpoint) } }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: answer.slice(midpoint) } }] })}\n\n`,
+          "data: [DONE]\n\n",
+        ];
+        return new Response(new ReadableStream({ start(controller) {
+          for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+          controller.close();
+        } }), { headers: { "Content-Type": "text/event-stream" } });
+      }
+      return fakeJson({ choices: [{ message: { content: answer } }] });
     }
     if (url.endsWith("/images/edits")) {
       imageCalls += 1;
@@ -134,6 +162,21 @@ try {
   assert.equal(look.warnings[0].itemId, shoeId);
   assert.equal(look.status, "idea");
   assert.equal(imageCalls, 0, "Suggestions must not make a photo.");
+
+  returnInvalidFirst = true;
+  const streamed = await invoke("/suggest", "POST", { tripId, count: 1, selectedItemIds: [topId, bottomId, shoeId], anchorId: topId }, { accept: "application/x-ndjson" });
+  assert.equal(streamed.status, 200);
+  assert.deepEqual(streamed.body.map((event) => event.stage).filter(Boolean), ["preparing", "weather", "model", "thinking", "responding", "checking", "retrying", "model", "thinking", "responding", "checking", "saving"]);
+  assert.equal(streamed.body.at(-1).type, "done");
+  assert.equal(streamed.body.at(-1).looks[0].garmentIds[0], topId);
+  assert.equal(imageCalls, 0);
+
+  failNextSuggestion = true;
+  const timedOut = await invoke("/suggest", "POST", { tripId, count: 1, selectedItemIds: [topId, bottomId] }, { accept: "application/x-ndjson" });
+  assert.equal(timedOut.status, 200);
+  assert.deepEqual(timedOut.body.map((event) => event.stage).filter(Boolean), ["preparing", "weather", "model"]);
+  assert.equal(timedOut.body.at(-1).type, "error");
+  assert.match(timedOut.body.at(-1).message, /more than five minutes/);
 
   const revised = await invoke(`/looks/${look.id}/revise`, "POST", { message: "Keep it suitable for walking." });
   assert.equal(revised.status, 200);
