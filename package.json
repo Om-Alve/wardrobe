@@ -9,7 +9,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "npm run build"
+    "check": "npm run build && npm run test:stylist && npm run test:import-llm",
+    "test:stylist": "node scripts/verify-stylist.mjs",
+    "test:import-llm": "node scripts/verify-import-llm.mjs"
   },
   "dependencies": {
     "@fontsource-variable/instrument-sans": "^5.2.8",

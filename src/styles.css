@@ -35,6 +35,38 @@ button { font: inherit; }
   background: var(--paper);
 }
 
+.app-topbar {
+  min-height: 64px;
+  padding: 0 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.app-brand { font-size: 17px; font-weight: 660; letter-spacing: -.045em; }
+.app-topbar nav { display: flex; align-items: stretch; align-self: stretch; gap: 30px; }
+.app-topbar button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .055em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.app-topbar button.active { color: var(--ink); border-bottom-color: var(--accent); }
+.app-topbar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+@media (max-width: 650px) {
+  .app-topbar { padding: 0 18px; min-height: 58px; }
+  .app-topbar nav { gap: 14px; }
+  .app-topbar button { font-size: 10px; }
+}
+
 .gallery-pane { min-width: 0; }
 
 .gallery-header {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Plus, Trash, X } from "@phosphor-icons/react";
 import { WardrobeImportFlow } from "./import-flow.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
+import { Stylist } from "./Stylist.jsx";
 
 const STORAGE_KEY = "open-wardrobe-edits-v1";
 const DELETED_STORAGE_KEY = "open-wardrobe-deleted-v1";
@@ -533,6 +534,7 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
 }
 
 export function App() {
+  const [view, setView] = useState("wardrobe");
   const [items, setItems] = useState([]);
   const [activeType, setActiveType] = useState("all");
   const [selectedId, setSelectedId] = useState(null);
@@ -605,6 +607,14 @@ export function App() {
 
   return (
     <div className={`app-shell${selectedItem ? " has-selection" : ""}`}>
+      <div className="app-topbar">
+        <span className="app-brand">Wardrobe</span>
+        <nav aria-label="Main navigation">
+          <button type="button" className={view === "wardrobe" ? "active" : ""} onClick={() => { setView("wardrobe"); setSelectedId(null); }}>My wardrobe</button>
+          <button type="button" className={view === "stylist" ? "active" : ""} onClick={() => { setView("stylist"); setSelectedId(null); }}>Trips & outfits</button>
+        </nav>
+      </div>
+      {view === "wardrobe" ? <>
       <main className="gallery-pane">
         <header className="gallery-header">
           <div className="gallery-meta-row">
@@ -645,6 +655,7 @@ export function App() {
 
       {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} />}
       <WardrobeImportFlow onGarmentApproved={addImportedItem} onModeledApproved={attachImportedModeledImage} />
+      </> : <Stylist items={items} />}
     </div>
   );
 }

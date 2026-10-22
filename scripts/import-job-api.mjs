@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import { chatJson, imageSettings, llmSettings } from "./llm-client.mjs";
 
 const API_ROOT = "/api/import/jobs";
 const ASSET_ROOT = "/api/import/assets";
@@ -319,24 +320,9 @@ async function openAIEdit({ key, baseUrl, model, prompt, images, size, backgroun
 }
 
 async function openAIAnalyze({ key, baseUrl, model, image, mime }) {
-  const response = await fetch(`${baseUrl}/responses`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      input: [{ role: "user", content: [
-        { type: "input_text", text: "Identify every distinct wearable clothing item visible in this image. A photo may show one isolated garment or a person wearing several items. Return one record per actual item that should enter a wardrobe. Ignore the person's body and non-wearable background objects. For each item, include a tight bounding box around only that item using integer coordinates normalized to a 1000 by 1000 image: x and y are the top-left corner, followed by width and height. Boxes may overlap when garments overlap, but each box must focus on one distinct item. Use only these category ids: upperbody, wholebody_up, lowerbody, accessories_up, shoes. Suggest a concise specific name, primary hex color, optional genuinely distinct secondary hex color, and 1-4 useful lowercase detail tags." },
-        { type: "input_image", image_url: `data:${mime};base64,${image.toString("base64")}` },
-      ] }],
-      text: { format: { type: "json_schema", name: "wardrobe_items", strict: true, schema: { type: "object", additionalProperties: false, properties: { items: { type: "array", minItems: 0, maxItems: 8, items: { type: "object", additionalProperties: false, properties: { name: { type: "string" }, part: { type: "string", enum: ["upperbody", "wholebody_up", "lowerbody", "accessories_up", "shoes"] }, color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" }, secondaryColor: { anyOf: [{ type: "string", pattern: "^#[0-9A-Fa-f]{6}$" }, { type: "null" }] }, tags: { type: "array", items: { type: "string" }, maxItems: 4 }, boundingBox: { type: "object", additionalProperties: false, properties: { x: { type: "integer", minimum: 0, maximum: 999 }, y: { type: "integer", minimum: 0, maximum: 999 }, width: { type: "integer", minimum: 1, maximum: 1000 }, height: { type: "integer", minimum: 1, maximum: 1000 } }, required: ["x", "y", "width", "height"] } }, required: ["name", "part", "color", "secondaryColor", "tags", "boundingBox"] } } }, required: ["items"] } } },
-    }),
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error?.message || `OpenAI analysis failed (${response.status})`);
-  const outputText = result.output_text || result.output?.flatMap((item) => item.content || []).find((item) => item.type === "output_text")?.text;
-  if (!outputText) throw new Error("OpenAI analysis returned no structured result");
-  const parsed = JSON.parse(outputText);
-  if (!Array.isArray(parsed.items)) throw new Error("OpenAI analysis returned an invalid clothing list");
+  const prompt = "Identify every distinct wearable clothing item visible in this image. A photo may show one isolated garment or a person wearing several items. Return one record per actual item that should enter a wardrobe. Ignore the person's body and non-wearable background objects. For each item, include a tight bounding box around only that item using integer coordinates normalized to a 1000 by 1000 image: x and y are the top-left corner, followed by width and height. Boxes may overlap when garments overlap, but each box must focus on one distinct item. Use only these category ids: upperbody, wholebody_up, lowerbody, accessories_up, shoes. Suggest a concise specific name, primary hex color, optional genuinely distinct secondary hex color, and 1-4 useful lowercase detail tags. Return JSON in this exact shape: {\"items\":[{\"name\":\"...\",\"part\":\"upperbody\",\"color\":\"#112233\",\"secondaryColor\":null,\"tags\":[\"cotton\"],\"boundingBox\":{\"x\":0,\"y\":0,\"width\":500,\"height\":500}}]}. Return at most 8 items.";
+  const parsed = await chatJson({ key, baseUrl, model, prompt, image, mime });
+  if (!Array.isArray(parsed.items)) throw new Error("The vision model returned an invalid clothing list");
   return parsed.items;
 }
 
@@ -347,10 +333,12 @@ export function wardrobeImportApi(options = {}) {
   let libraryAssetDir;
   const running = new Map();
   const setting = (name, fallback = "") => options.env?.[name] || process.env[name] || fallback;
-  const apiBaseUrl = () => setting("OPENAI_API_BASE_URL", "https://api.openai.com/v1").replace(/\/$/, "");
+  const llm = () => llmSettings(setting);
+  const image = () => imageSettings(setting);
 
   async function setupStatus() {
-    const hasApiKey = Boolean(setting("OPENAI_API_KEY").trim());
+    const hasLlm = llm().configured;
+    const hasImageKey = Boolean(image().key);
     const referenceSetting = setting("WARDROBE_MODEL_REFERENCE", "data/model-reference.png");
     const referencePath = path.resolve(root, referenceSetting);
     let hasModelReference = false;
@@ -360,8 +348,9 @@ export function wardrobeImportApi(options = {}) {
       if (error.code !== "ENOENT") throw error;
     }
     return {
-      ready: hasApiKey && hasModelReference,
-      hasApiKey,
+      ready: hasLlm && hasImageKey && hasModelReference,
+      hasLlm,
+      hasImageKey,
       hasModelReference,
       modelReference: referenceSetting,
     };
@@ -434,15 +423,15 @@ export function wardrobeImportApi(options = {}) {
       try {
         const dir = path.join(jobsDir, current.id);
         const output = path.join(dir, `${stageName}-${stage.attempts}.png`);
-        const key = setting("OPENAI_API_KEY");
-        if (!key) throw new Error("OPENAI_API_KEY is not configured");
+        const { key, baseUrl } = image();
+        if (!key) throw new Error("OPENAI_IMAGE_API_KEY is not configured");
         const sourceFile = stageName === "garment" && current.internal.cropFile ? current.internal.cropFile : current.internal.originalFile;
         const original = { data: await readFile(path.join(dir, sourceFile)), mime: "image/png", name: sourceFile };
         let bytes;
         if (stageName === "garment") {
           chromaKeyUsed = chooseChromaKey(current.metadata.color);
           const basePrompt = options.garmentPrompt || buildGarmentPrompt(current.metadata, chromaKeyUsed);
-          bytes = await openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_GARMENT_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1024x1024", images: [original], prompt: current.stages.garment.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.garment.prompt}` : basePrompt });
+          bytes = await openAIEdit({ key, baseUrl, model: setting("OPENAI_GARMENT_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1024x1024", images: [original], prompt: current.stages.garment.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.garment.prompt}` : basePrompt });
           const rawName = `${stageName}-${stage.attempts}-source.png`;
           await writeFile(path.join(dir, rawName), bytes);
           failedAssetUrl = `${ASSET_ROOT}/${current.id}/${rawName}`;
@@ -463,7 +452,7 @@ export function wardrobeImportApi(options = {}) {
           }
           const model = { data: modelData, mime: "image/png", name: "model.png" };
           const basePrompt = options.modeledPrompt || "Create a professional horizontal 3:2 editorial fashion photograph of the person in Image 1 wearing the exact garment from Image 2. Preserve the person's recognizable identity, face, hair, age and proportions. Preserve every garment color, material, fit, construction, graphic, logo and distinctive detail. Keep the complete featured item clearly visible and unobstructed, use understated neutral supporting clothes, realistic anatomy, natural light, authentic fabric, a tasteful real-world setting, and leave environmental space around the model. No text, watermark, product mockup, or synthetic appearance.";
-          bytes = await openAIEdit({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [model, garment], prompt: current.stages.modeled.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.modeled.prompt}` : basePrompt });
+          bytes = await openAIEdit({ key, baseUrl, model: setting("OPENAI_MODELED_MODEL", setting("OPENAI_IMAGE_MODEL", "gpt-image-2")), quality: setting("OPENAI_IMAGE_QUALITY", "high"), size: "1536x1024", images: [model, garment], prompt: current.stages.modeled.prompt ? `${basePrompt}\nUser regeneration direction: ${current.stages.modeled.prompt}` : basePrompt });
         }
         await writeFile(output, bytes);
         const fresh = await loadJob(current.id);
@@ -530,7 +519,8 @@ export function wardrobeImportApi(options = {}) {
         const setup = await setupStatus();
         if (!setup.ready) {
           const missing = [
-            !setup.hasApiKey && "OPENAI_API_KEY in .env",
+            !setup.hasLlm && "WARDROBE_LLM_API_KEY or WARDROBE_LLM_BASE_URL in .env",
+            !setup.hasImageKey && "OPENAI_IMAGE_API_KEY in .env",
             !setup.hasModelReference && `a PNG photo of yourself at ${setup.modelReference}`,
           ].filter(Boolean).join(" and ");
           return json(res, 503, { error: `Setup required: add ${missing}, then restart the app.` });
@@ -538,8 +528,7 @@ export function wardrobeImportApi(options = {}) {
         const input = await body(req);
         const image = decodeImage(input);
         const normalizedImage = await normalizeImage(image.data);
-        const key = setting("OPENAI_API_KEY");
-        const detected = (await openAIAnalyze({ key, baseUrl: apiBaseUrl(), model: setting("OPENAI_VISION_MODEL", "gpt-5.4-mini"), image: normalizedImage, mime: "image/png" })).map(normalizeMetadata);
+        const detected = (await openAIAnalyze({ ...llm(), model: setting("WARDROBE_VISION_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_VISION_MODEL", "gpt-5.4-mini"))), image: normalizedImage, mime: "image/png" })).map(normalizeMetadata);
         const jobs = [];
         for (const metadata of detected) {
           const id = randomUUID();
