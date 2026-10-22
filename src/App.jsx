@@ -616,7 +616,8 @@ export function App() {
         <span className="app-brand">Wardrobe</span>
         <nav aria-label="Main navigation">
           <button type="button" className={view === "wardrobe" ? "active" : ""} onClick={() => { setView("wardrobe"); setSelectedId(null); }}>Clothes</button>
-          <button type="button" className={view === "stylist" ? "active" : ""} onClick={() => { setView("stylist"); setSelectedId(null); }}>Outfits</button>
+          <button type="button" className={view === "stylist" ? "active" : ""} onClick={() => { setView("stylist"); setSelectedId(null); }}>Planner</button>
+          <button type="button" className={view === "outfits" ? "active" : ""} onClick={() => { setView("outfits"); setSelectedId(null); }}>Outfits</button>
         </nav>
       </div>
       {view === "wardrobe" ? <>
@@ -661,7 +662,7 @@ export function App() {
 
       {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} />}
       <WardrobeImportFlow onGarmentApproved={addImportedItem} onModeledApproved={attachImportedModeledImage} />
-      </> : <Stylist items={items} />}
+      </> : <Stylist items={items} view={view} onNavigate={setView} />}
     </div>
   );
 }

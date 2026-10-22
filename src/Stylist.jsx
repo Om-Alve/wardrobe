@@ -205,9 +205,11 @@ function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRev
   );
 }
 
-export function Stylist({ items }) {
+export function Stylist({ items, view, onNavigate }) {
   const [state, setState] = useState(EMPTY_STATE);
+  const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState("all");
+  const [savedScope, setSavedScope] = useState("all");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -219,12 +221,14 @@ export function Stylist({ items }) {
   const [anchorId, setAnchorId] = useState("");
   const [chosenIds, setChosenIds] = useState(null);
   const [weather, setWeather] = useState(null);
-  const [lookFilter, setLookFilter] = useState("all");
   const [suggestionProgress, setSuggestionProgress] = useState(null);
   const [suggestionSeconds, setSuggestionSeconds] = useState(0);
 
   const refresh = useCallback(async () => setState(await request("/state")), []);
-  useEffect(() => { refresh().catch((failure) => setError(failure.message)); }, [refresh]);
+  useEffect(() => { refresh().catch((failure) => setError(failure.message)).finally(() => setLoading(false)); }, [refresh]);
+  useEffect(() => {
+    if (savedScope !== "all" && savedScope !== "wardrobe" && !state.trips.some((entry) => entry.id === savedScope)) setSavedScope("all");
+  }, [savedScope, state.trips]);
   useEffect(() => {
     if (!state.looks.some((look) => look.status === "generating")) return undefined;
     const timer = window.setInterval(() => refresh().catch(() => {}), 2500);
@@ -243,12 +247,15 @@ export function Stylist({ items }) {
     finally { setBusy(false); }
   };
   const trip = state.trips.find((entry) => entry.id === scope) || null;
+  const savedView = view === "outfits";
   const available = useMemo(() => trip
     ? items.filter((item) => ["packed", "worn"].includes(trip.items?.[item.id]))
     : items, [items, trip]);
   const requestItems = chosenIds ? available.filter((item) => chosenIds.includes(item.id)) : available;
-  const looks = state.looks.filter((look) => look.tripId === (trip?.id || null)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const shownLooks = looks.filter((look) => lookFilter === "all" || (lookFilter === "saved" ? Boolean(look.savedAt) : !look.savedAt));
+  const draftLooks = state.looks.filter((look) => !look.savedAt && look.tripId === (trip?.id || null)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const allSavedLooks = state.looks.filter((look) => Boolean(look.savedAt));
+  const savedLooks = allSavedLooks.filter((look) => savedScope === "all" || (savedScope === "wardrobe" ? !look.tripId : look.tripId === savedScope))
+    .sort((a, b) => b.savedAt.localeCompare(a.savedAt));
   const setRevision = (id, value) => setRevisionState((current) => ({ ...current, [id]: value }));
   const createTrip = async (details) => act(async () => {
     const created = await request("/trips", "POST", details);
@@ -271,15 +278,51 @@ export function Stylist({ items }) {
 
   useEffect(() => { setAnchorId(""); setChosenIds(null); setWeather(null); setConditions(""); }, [scope]);
 
+  const renderLook = (look) => <LookCard
+    key={look.id} look={look} items={items}
+    trip={state.trips.find((entry) => entry.id === look.tripId) || null}
+    setup={state.setup} busy={busy}
+    revision={revision[look.id]} setRevision={setRevision}
+    onRevise={(id) => act(async () => { await request(`/looks/${id}/revise`, "POST", { message: revision[id] }); setRevision(id, ""); }, "Look revised.")}
+    onPhoto={(id) => act(() => request(`/looks/${id}/photo`, "POST"), "Photo generation started.")}
+    onSave={async (id) => {
+      if (await act(() => request(`/looks/${id}/save`, "POST"), "Outfit saved.")) {
+        setSavedScope(look.tripId || "all");
+        onNavigate("outfits");
+      }
+    }}
+    onDate={(id, date) => act(() => request(`/looks/${id}`, "PATCH", { date }))}
+    onDelete={deleteLook}
+  />;
+
   return (
     <main className="stylist-page">
-      <header className="stylist-hero"><h1>Trips & outfits</h1><p>Build looks from your wardrobe or a trip packing list.</p></header>
-      {!state.setup.hasLlm && <p className="stylist-alert">Set <code>WARDROBE_LLM_API_KEY</code> or <code>WARDROBE_LLM_BASE_URL</code> in <code>.env</code> and restart the app to ask for outfits.</p>}
-      {!state.setup.hasImageKey && <p className="stylist-alert">Add <code>OPENAI_IMAGE_API_KEY</code> to <code>.env</code> to create modeled photos.</p>}
-      {!state.setup.hasReference && <p className="stylist-alert">Add <code>data/model-reference.png</code> to create modeled photos.</p>}
+      <header className="stylist-hero"><h1>{savedView ? "Saved outfits" : "Outfit planner"}</h1>{!savedView && <p>Build looks from your wardrobe or a trip packing list.</p>}</header>
+      {!savedView && !state.setup.hasLlm && <p className="stylist-alert">Set <code>WARDROBE_LLM_API_KEY</code> or <code>WARDROBE_LLM_BASE_URL</code> in <code>.env</code> and restart the app to ask for outfits.</p>}
+      {!savedView && !state.setup.hasImageKey && <p className="stylist-alert">Add <code>OPENAI_IMAGE_API_KEY</code> to <code>.env</code> to create modeled photos.</p>}
+      {!savedView && !state.setup.hasReference && <p className="stylist-alert">Add <code>data/model-reference.png</code> to create modeled photos.</p>}
       {error && <p className="stylist-alert error" role="alert">{error}</p>}
       {notice && <p className="stylist-notice" role="status">{notice}</p>}
 
+      {savedView ? <div className="stylist-layout">
+        <aside className="stylist-sidebar">
+          <section className="stylist-panel">
+            <div className="stylist-section-heading"><h2>Collections</h2></div>
+            <div className="stylist-trip-nav">
+              <button type="button" className={savedScope === "all" ? "active" : ""} onClick={() => setSavedScope("all")}>All outfits <span>{allSavedLooks.length}</span></button>
+              <button type="button" className={savedScope === "wardrobe" ? "active" : ""} onClick={() => setSavedScope("wardrobe")}>Whole wardrobe <span>{allSavedLooks.filter((look) => !look.tripId).length}</span></button>
+              {state.trips.filter((entry) => allSavedLooks.some((look) => look.tripId === entry.id)).map((entry) => <button type="button" className={savedScope === entry.id ? "active" : ""} key={entry.id} onClick={() => setSavedScope(entry.id)}>{entry.name} <span>{allSavedLooks.filter((look) => look.tripId === entry.id).length}</span></button>)}
+            </div>
+          </section>
+        </aside>
+        <div className="stylist-content">
+          <section className="stylist-results">
+            {loading && <div className="stylist-empty">Loading outfits…</div>}
+            {!loading && !savedLooks.length && <div className="stylist-empty">No saved outfits here. Save a draft from the planner to add one.</div>}
+            {savedLooks.map(renderLook)}
+          </section>
+        </div>
+      </div> :
       <div className="stylist-layout">
         <aside className="stylist-sidebar">
           <section className="stylist-panel">
@@ -301,12 +344,11 @@ export function Stylist({ items }) {
               event.preventDefault();
               setSuggestionSeconds(0);
               setSuggestionProgress({ startedAt: Date.now(), stages: [] });
-              const succeeded = await act(() => requestSuggestions({ tripId: trip?.id || null, selectedItemIds: requestItems.map((item) => item.id), count: Number(count), occasion, conditions, brief, anchorId: requestItems.some((item) => item.id === anchorId) ? anchorId : "" }, (stage) => {
+              await act(() => requestSuggestions({ tripId: trip?.id || null, selectedItemIds: requestItems.map((item) => item.id), count: Number(count), occasion, conditions, brief, anchorId: requestItems.some((item) => item.id === anchorId) ? anchorId : "" }, (stage) => {
                 setSuggestionProgress((current) => current && current.stages.at(-1) !== stage
                   ? { ...current, stages: [...current.stages, stage] } : current);
               }), "Draft looks saved. Revise one or make its photo.");
               setSuggestionProgress(null);
-              if (succeeded) setLookFilter("drafts");
             }}>
               <details className="stylist-item-picker"><summary>Choose items for this request <span>{requestItems.length} of {available.length} selected</span></summary>
                 <div className="stylist-picker-actions"><button type="button" className="stylist-text-button" onClick={() => setChosenIds(null)}>Select all available</button></div>
@@ -333,22 +375,13 @@ export function Stylist({ items }) {
             </form>
           </section>
           <section className="stylist-results">
-            <div className="stylist-section-heading"><h2>Outfits</h2><span className="stylist-item-count">{looks.length} {looks.length === 1 ? "look" : "looks"}</span></div>
-            <div className="stylist-look-filters" aria-label="Filter looks">{[["all", "All"], ["drafts", "Drafts"], ["saved", "Saved"]].map(([value, label]) => <button type="button" key={value} className={lookFilter === value ? "active" : ""} onClick={() => setLookFilter(value)}>{label}</button>)}</div>
-            {!shownLooks.length && <div className="stylist-empty">{looks.length ? "No outfits in this view." : "Choose some items and suggest your first outfit."}</div>}
-            {shownLooks.map((look) => <LookCard
-              key={look.id} look={look} items={items} trip={trip} setup={state.setup} busy={busy}
-              revision={revision[look.id]} setRevision={setRevision}
-              onRevise={(id) => act(async () => { await request(`/looks/${id}/revise`, "POST", { message: revision[id] }); setRevision(id, ""); }, "Look revised.")}
-              onPhoto={(id) => act(() => request(`/looks/${id}/photo`, "POST"), "Photo generation started.")}
-              onSave={async (id) => { if (await act(() => request(`/looks/${id}/save`, "POST"), "Outfit saved.")) setLookFilter("saved"); }}
-              onDate={(id, date) => act(() => request(`/looks/${id}`, "PATCH", { date }))}
-              onDelete={deleteLook}
-            />)}
+            <div className="stylist-section-heading"><h2>Drafts</h2><span className="stylist-item-count">{draftLooks.length} {draftLooks.length === 1 ? "look" : "looks"}</span></div>
+            {!draftLooks.length && <div className="stylist-empty">No drafts yet.</div>}
+            {draftLooks.map(renderLook)}
           </section>
           <p className="stylist-credit">Color references: <a href="https://github.com/mattdesl/dictionary-of-colour-combinations" target="_blank" rel="noreferrer">Sanzo Wada dictionary dataset</a>. Forecast: <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a>.</p>
         </div>
-      </div>
+      </div>}
     </main>
   );
 }

@@ -211,9 +211,6 @@
 }
 .stylist-results { display: flex; flex-direction: column; gap: 17px; }
 .stylist-results > .stylist-section-heading { margin: 4px 0 0; }
-.stylist-look-filters { display: flex; gap: 0; border-bottom: 1px solid var(--line); }
-.stylist-look-filters button { border: 0; border-bottom: 2px solid transparent; padding: 9px 18px 11px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 550; cursor: pointer; }
-.stylist-look-filters button.active { color: var(--ink); border-bottom-color: var(--accent); }
 .stylist-empty { padding: 38px 24px; border: 1px solid var(--line); background: #fff; color: var(--muted); font-size: 13px; }
 .stylist-look { padding: 18px; border: 1px solid var(--line); background: #fff; }
 .stylist-look-main { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 20px; }

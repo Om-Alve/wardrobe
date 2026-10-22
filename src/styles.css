@@ -62,8 +62,9 @@ button { font: inherit; }
 .app-topbar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 @media (max-width: 650px) {
-  .app-topbar { padding: 0 18px; min-height: 58px; }
-  .app-topbar nav { gap: 16px; }
+  .app-topbar { padding: 0 18px; min-height: 58px; gap: 12px; }
+  .app-brand { font-size: 15px; }
+  .app-topbar nav { gap: 11px; }
   .app-topbar button { font-size: 12px; }
 }
 
