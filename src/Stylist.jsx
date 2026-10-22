@@ -162,7 +162,7 @@ function TripDetails({ trip, items, busy, onSave, onDelete }) {
   );
 }
 
-function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRevise, onPhoto, onSave, onDate, onDelete }) {
+function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRevise, onPhoto, onSave, onDate, onDelete, hideHeading = false }) {
   const garments = look.garmentIds.map((id) => items.find((item) => item.id === id)).filter(Boolean);
   const currentWarnings = trip ? garments.filter((item) => trip.items?.[item.id] === "worn").map((item) => `${item.name} is marked worn or in laundry.`) : [];
   const unavailable = trip ? garments.filter((item) => !["packed", "worn"].includes(trip.items?.[item.id])) : [];
@@ -171,12 +171,14 @@ function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRev
   return (
     <article className="stylist-look">
       <div className="stylist-look-main">
-        {look.image ? <img className="stylist-look-photo" src={look.image} alt={`Modeled preview for ${look.name}`} /> : (
+        {look.image ? <img className="stylist-look-photo" src={look.image} alt={`Modeled preview for ${look.name}`} loading="lazy" /> : (
           <div className="stylist-look-collage">{garments.map((item) => <ItemThumb key={item.id} item={item} />)}</div>
         )}
         <div className="stylist-look-copy">
-          <div className="stylist-look-topline"><span>{look.status === "generating" ? "Making photo" : look.status === "review" ? "Review photo" : look.savedAt ? "Saved" : "Draft"}</span><span>{look.occasion}</span></div>
-          <h3>{look.name}</h3>
+          {!hideHeading && <>
+            <div className="stylist-look-topline"><span>{look.status === "generating" ? "Making photo" : look.status === "review" ? "Review photo" : look.savedAt ? "Saved" : "Draft"}</span><span>{look.occasion}</span></div>
+            <h3>{look.name}</h3>
+          </>}
           <p>{look.reason}</p>
           <div className="stylist-garment-list">{garments.map((item) => <span key={item.id}>{item.name}</span>)}</div>
           {look.palette && <div className="stylist-palette">
@@ -227,8 +229,9 @@ export function Stylist({ items, view, onNavigate }) {
   const refresh = useCallback(async () => setState(await request("/state")), []);
   useEffect(() => { refresh().catch((failure) => setError(failure.message)).finally(() => setLoading(false)); }, [refresh]);
   useEffect(() => {
-    if (savedScope !== "all" && savedScope !== "wardrobe" && !state.trips.some((entry) => entry.id === savedScope)) setSavedScope("all");
-  }, [savedScope, state.trips]);
+    if (savedScope !== "all" && savedScope !== "wardrobe" && !state.looks.some((look) => look.savedAt && look.tripId === savedScope)) setSavedScope("all");
+    if (savedScope === "wardrobe" && !state.looks.some((look) => look.savedAt && !look.tripId)) setSavedScope("all");
+  }, [savedScope, state.looks]);
   useEffect(() => {
     if (!state.looks.some((look) => look.status === "generating")) return undefined;
     const timer = window.setInterval(() => refresh().catch(() => {}), 2500);
@@ -254,6 +257,9 @@ export function Stylist({ items, view, onNavigate }) {
   const requestItems = chosenIds ? available.filter((item) => chosenIds.includes(item.id)) : available;
   const draftLooks = state.looks.filter((look) => !look.savedAt && look.tripId === (trip?.id || null)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const allSavedLooks = state.looks.filter((look) => Boolean(look.savedAt));
+  const wardrobeSavedCount = allSavedLooks.filter((look) => !look.tripId).length;
+  const savedTripCollections = state.trips.filter((entry) => allSavedLooks.some((look) => look.tripId === entry.id));
+  const showSavedFilters = Number(wardrobeSavedCount > 0) + savedTripCollections.length > 1;
   const savedLooks = allSavedLooks.filter((look) => savedScope === "all" || (savedScope === "wardrobe" ? !look.tripId : look.tripId === savedScope))
     .sort((a, b) => b.savedAt.localeCompare(a.savedAt));
   const setRevision = (id, value) => setRevisionState((current) => ({ ...current, [id]: value }));
@@ -278,25 +284,41 @@ export function Stylist({ items, view, onNavigate }) {
 
   useEffect(() => { setAnchorId(""); setChosenIds(null); setWeather(null); setConditions(""); }, [scope]);
 
-  const renderLook = (look) => <LookCard
-    key={look.id} look={look} items={items}
-    trip={state.trips.find((entry) => entry.id === look.tripId) || null}
-    setup={state.setup} busy={busy}
-    revision={revision[look.id]} setRevision={setRevision}
-    onRevise={(id) => act(async () => { await request(`/looks/${id}/revise`, "POST", { message: revision[id] }); setRevision(id, ""); }, "Look revised.")}
-    onPhoto={(id) => act(() => request(`/looks/${id}/photo`, "POST"), "Photo generation started.")}
-    onSave={async (id) => {
-      if (await act(() => request(`/looks/${id}/save`, "POST"), "Outfit saved.")) {
-        setSavedScope(look.tripId || "all");
-        onNavigate("outfits");
-      }
-    }}
-    onDate={(id, date) => act(() => request(`/looks/${id}`, "PATCH", { date }))}
-    onDelete={deleteLook}
-  />;
+  const renderLook = (look) => {
+    const lookTrip = state.trips.find((entry) => entry.id === look.tripId) || null;
+    const card = <LookCard
+      key={look.id} look={look} items={items} trip={lookTrip} hideHeading={savedView}
+      setup={state.setup} busy={busy}
+      revision={revision[look.id]} setRevision={setRevision}
+      onRevise={(id) => act(async () => { await request(`/looks/${id}/revise`, "POST", { message: revision[id] }); setRevision(id, ""); }, "Look revised.")}
+      onPhoto={(id) => act(() => request(`/looks/${id}/photo`, "POST"), "Photo generation started.")}
+      onSave={async (id) => {
+        if (await act(() => request(`/looks/${id}/save`, "POST"), "Outfit saved.")) {
+          setSavedScope(look.tripId || "all");
+          onNavigate("outfits");
+        }
+      }}
+      onDate={(id, date) => act(() => request(`/looks/${id}`, "PATCH", { date }))}
+      onDelete={deleteLook}
+    />;
+    if (!savedView) return card;
+    const garments = look.garmentIds.map((id) => items.find((item) => item.id === id)).filter(Boolean);
+    const previewItems = ["upperbody", "lowerbody"].map((part) => garments.find((item) => item.part === part)).filter(Boolean);
+    const detail = look.status === "generating" ? "Making photo" : look.status === "review" ? "Review photo" : look.status === "failed" ? "Photo failed" : look.date || `${garments.length} pieces`;
+    return <details className="stylist-saved-row" key={look.id}>
+      <summary>
+        <span className={`stylist-saved-thumb${look.image ? " has-photo" : ""}`}>
+          {look.image ? <img src={look.image} alt="" loading="lazy" /> : previewItems.map((item) => <ItemThumb key={item.id} item={item} />)}
+        </span>
+        <span className="stylist-saved-copy"><strong>{look.name}</strong><small>{[lookTrip?.name || "Whole wardrobe", look.occasion].filter(Boolean).join(" · ")}</small></span>
+        <span className="stylist-saved-detail">{detail}</span>
+      </summary>
+      {card}
+    </details>;
+  };
 
   return (
-    <main className="stylist-page">
+    <main className={`stylist-page${savedView ? " saved-outfits-page" : ""}`}>
       <header className="stylist-hero"><h1>{savedView ? "Saved outfits" : "Outfit planner"}</h1>{!savedView && <p>Build looks from your wardrobe or a trip packing list.</p>}</header>
       {!savedView && !state.setup.hasLlm && <p className="stylist-alert">Set <code>WARDROBE_LLM_API_KEY</code> or <code>WARDROBE_LLM_BASE_URL</code> in <code>.env</code> and restart the app to ask for outfits.</p>}
       {!savedView && !state.setup.hasImageKey && <p className="stylist-alert">Add <code>OPENAI_IMAGE_API_KEY</code> to <code>.env</code> to create modeled photos.</p>}
@@ -304,24 +326,17 @@ export function Stylist({ items, view, onNavigate }) {
       {error && <p className="stylist-alert error" role="alert">{error}</p>}
       {notice && <p className="stylist-notice" role="status">{notice}</p>}
 
-      {savedView ? <div className="stylist-layout">
-        <aside className="stylist-sidebar">
-          <section className="stylist-panel">
-            <div className="stylist-section-heading"><h2>Collections</h2></div>
-            <div className="stylist-trip-nav">
-              <button type="button" className={savedScope === "all" ? "active" : ""} onClick={() => setSavedScope("all")}>All outfits <span>{allSavedLooks.length}</span></button>
-              <button type="button" className={savedScope === "wardrobe" ? "active" : ""} onClick={() => setSavedScope("wardrobe")}>Whole wardrobe <span>{allSavedLooks.filter((look) => !look.tripId).length}</span></button>
-              {state.trips.filter((entry) => allSavedLooks.some((look) => look.tripId === entry.id)).map((entry) => <button type="button" className={savedScope === entry.id ? "active" : ""} key={entry.id} onClick={() => setSavedScope(entry.id)}>{entry.name} <span>{allSavedLooks.filter((look) => look.tripId === entry.id).length}</span></button>)}
-            </div>
-          </section>
-        </aside>
-        <div className="stylist-content">
-          <section className="stylist-results">
-            {loading && <div className="stylist-empty">Loading outfits…</div>}
-            {!loading && !savedLooks.length && <div className="stylist-empty">No saved outfits here. Save a draft from the planner to add one.</div>}
-            {savedLooks.map(renderLook)}
-          </section>
-        </div>
+      {savedView ? <div className="stylist-saved-page">
+        {showSavedFilters && <nav className="stylist-saved-filters" aria-label="Saved outfit collections">
+          <button type="button" className={savedScope === "all" ? "active" : ""} onClick={() => setSavedScope("all")}>All</button>
+          {wardrobeSavedCount > 0 && <button type="button" className={savedScope === "wardrobe" ? "active" : ""} onClick={() => setSavedScope("wardrobe")}>Whole wardrobe</button>}
+          {savedTripCollections.map((entry) => <button type="button" className={savedScope === entry.id ? "active" : ""} key={entry.id} onClick={() => setSavedScope(entry.id)}>{entry.name}</button>)}
+        </nav>}
+        <section className="stylist-results">
+          {loading && <div className="stylist-empty">Loading outfits…</div>}
+          {!loading && !error && !savedLooks.length && <div className="stylist-empty">No saved outfits here. Save a draft from the planner to add one.</div>}
+          {savedLooks.map(renderLook)}
+        </section>
       </div> :
       <div className="stylist-layout">
         <aside className="stylist-sidebar">
