@@ -578,7 +578,8 @@ button { font: inherit; }
 }
 
 .field,
-.color-field {
+.color-field,
+.style-field {
   min-width: 0;
   margin: 0;
   border: 0;
@@ -586,7 +587,8 @@ button { font: inherit; }
 }
 
 .field > span,
-.color-field legend {
+.color-field legend,
+.style-field legend {
   display: block;
   margin-bottom: 8px;
   color: var(--muted);
@@ -615,7 +617,14 @@ button { font: inherit; }
 .tag-input-row input:focus { border-color: var(--ink); outline: none; }
 
 .color-field,
-.details-field { grid-column: 1 / -1; }
+.details-field,
+.style-field { grid-column: 1 / -1; }
+
+.style-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px 14px;
+}
 
 .colors-editor {
   display: grid;
@@ -898,7 +907,9 @@ button { font: inherit; }
   .viewer-art.viewer-art-floating { flex-basis: auto; width: 36%; height: 178px; min-height: 0; }
   .item-editor { grid-template-columns: 1fr; }
   .color-field,
-  .details-field { grid-column: auto; }
+  .details-field,
+  .style-field { grid-column: auto; }
+  .style-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .colors-editor { grid-template-columns: 1fr; }
   .color-slot + .color-slot {
     border-top: 1px solid var(--line);

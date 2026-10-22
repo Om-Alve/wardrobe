@@ -11,9 +11,13 @@
     "preview": "vite preview",
     "normalize:garments": "node scripts/normalize-library-images.mjs",
     "normalize:garments:apply": "node scripts/normalize-library-images.mjs --apply",
-    "check": "npm run build && npm run test:stylist && npm run test:import-llm",
+    "describe:garments": "node scripts/describe-garments.mjs",
+    "describe:garments:apply": "node scripts/describe-garments.mjs --apply",
+    "check": "npm run build && npm run test:stylist && npm run test:outfits && npm run test:import-llm",
     "test:stylist": "node scripts/verify-stylist.mjs",
-    "test:import-llm": "node scripts/verify-import-llm.mjs"
+    "test:outfits": "node scripts/eval-outfits.mjs",
+    "test:import-llm": "node scripts/verify-import-llm.mjs",
+    "eval:live": "node scripts/eval-live-outfits.mjs"
   },
   "dependencies": {
     "@fontsource-variable/instrument-sans": "^5.2.8",

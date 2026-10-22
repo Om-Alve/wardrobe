@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { chatJson, imageSettings, llmSettings } from "./llm-client.mjs";
+import { attributePrompt, normalizeAttributes } from "./garment-attributes.mjs";
+import { chatJson, imageSettings, llmSettings, visionModel } from "./llm-client.mjs";
 
 const API_ROOT = "/api/import/jobs";
 const ASSET_ROOT = "/api/import/assets";
@@ -54,16 +55,23 @@ function decodeImage(input) {
 
 function normalizeMetadata(value = {}) {
   const metadata = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const part = PARTS.has(metadata.part) ? metadata.part : "upperbody";
   const color = typeof metadata.color === "string" && HEX_COLOR.test(metadata.color) ? metadata.color.toLowerCase() : "#d8d0c2";
   const secondaryColor = typeof metadata.secondaryColor === "string" && HEX_COLOR.test(metadata.secondaryColor) ? metadata.secondaryColor.toLowerCase() : null;
   return {
     name: typeof metadata.name === "string" ? metadata.name.trim().slice(0, 120) || "New piece" : "New piece",
-    part: PARTS.has(metadata.part) ? metadata.part : "upperbody",
+    part,
     color,
     secondaryColor,
     tags: Array.isArray(metadata.tags) ? metadata.tags.filter((tag) => typeof tag === "string").map((tag) => tag.trim().toLowerCase().slice(0, 40)).filter(Boolean).slice(0, 12) : [],
+    attributes: normalizeAttributes(metadata.attributes, part),
     boundingBox: normalizeBoundingBox(metadata.boundingBox),
   };
+}
+
+export async function describeGarment({ key, baseUrl, model, image, item }) {
+  const flattened = await sharp(image).resize(768, 768, { fit: "inside", withoutEnlargement: true }).flatten({ background: "#e6e6e6" }).png().toBuffer();
+  return normalizeAttributes(await chatJson({ key, baseUrl, model, prompt: attributePrompt(item), image: flattened }), item.part);
 }
 
 function normalizeBoundingBox(value = {}) {
@@ -392,14 +400,24 @@ export function wardrobeImportApi(options = {}) {
     const metadata = job.metadata || {};
     const records = await loadImported();
     const existing = records.find((record) => record.id === id);
-    const record = {
-      id,
+    // Once an item is in the library, its library record owns the description, including later edits.
+    const described = existing ? {
+      name: existing.name, part: existing.part, color: existing.color, secondaryColor: existing.secondaryColor,
+      palette: existing.palette, tags: existing.tags,
+    } : {
       name: metadata.name || "New piece",
       part: metadata.part || "upperbody",
       color: metadata.color || "#d8d0c2",
       secondaryColor: metadata.secondaryColor || null,
       palette: [metadata.color, metadata.secondaryColor].filter(Boolean),
       tags: Array.isArray(metadata.tags) ? metadata.tags : [],
+    };
+    const attributes = Object.keys(existing?.attributes || {}).length ? existing.attributes : normalizeAttributes(metadata.attributes, described.part);
+    const record = {
+      id,
+      ...described,
+      attributes,
+      attributesSource: existing?.attributesSource || (Object.keys(attributes).length ? "model" : null),
       image: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
       thumbnail: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
       modeledImage: modeledImage || existing?.modeledImage || null,
@@ -420,6 +438,7 @@ export function wardrobeImportApi(options = {}) {
       await saveJob(current);
       let failedAssetUrl = null;
       let chromaKeyUsed = null;
+      let attributes = null;
       try {
         const dir = path.join(jobsDir, current.id);
         const output = path.join(dir, `${stageName}-${stage.attempts}.png`);
@@ -436,6 +455,8 @@ export function wardrobeImportApi(options = {}) {
           await writeFile(path.join(dir, rawName), bytes);
           failedAssetUrl = `${ASSET_ROOT}/${current.id}/${rawName}`;
           bytes = await removeChromaBackground(bytes, chromaKeyUsed);
+          attributes = await describeGarment({ ...llm(), model: visionModel(setting), image: bytes, item: current.metadata })
+            .catch((error) => { console.warn(`Could not describe ${current.metadata.name}: ${error.message}`); return null; });
         } else {
           const garmentName = current.stages.garment.assetUrl
             ? path.basename(new URL(current.stages.garment.assetUrl, "http://localhost").pathname)
@@ -462,6 +483,7 @@ export function wardrobeImportApi(options = {}) {
         fresh.stages[stageName].cleanupPreviewUrl = null;
         fresh.stages[stageName].cleanupDiagnostics = null;
         if (chromaKeyUsed) fresh.stages[stageName].chromaKey = chromaKeyUsed;
+        if (attributes) fresh.metadata = { ...fresh.metadata, attributes };
         fresh.stages[stageName].updatedAt = new Date().toISOString();
         await saveJob(fresh);
       } catch (error) {
@@ -486,9 +508,28 @@ export function wardrobeImportApi(options = {}) {
       if (url.pathname === "/api/import/config" && req.method === "GET") {
         return json(res, 200, await setupStatus());
       }
-      const wardrobeDeleteMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})$/i);
-      if (wardrobeDeleteMatch && req.method === "DELETE") {
-        const id = wardrobeDeleteMatch[1];
+      const wardrobeItemMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})$/i);
+      if (wardrobeItemMatch && req.method === "PATCH") {
+        const input = await body(req, 64 * 1024);
+        const records = await loadImported();
+        const index = records.findIndex((record) => record.id === wardrobeItemMatch[1]);
+        if (index < 0) return json(res, 404, { error: "Imported wardrobe item not found" });
+        const current = records[index];
+        const { name, part, color, secondaryColor, tags } = normalizeMetadata({ ...current, ...input });
+        const edited = input.attributes && typeof input.attributes === "object" && !Array.isArray(input.attributes);
+        // Valid values replace, null clears, and anything invalid leaves the current value alone.
+        const attributes = { ...current.attributes, ...(edited ? normalizeAttributes(input.attributes, part) : {}) };
+        for (const [key, value] of Object.entries(edited ? input.attributes : {})) if (value === null) delete attributes[key];
+        records[index] = {
+          ...current, name, part, color, secondaryColor, tags,
+          attributes: normalizeAttributes(attributes, part),
+          ...(edited ? { attributesSource: "user" } : {}),
+        };
+        await atomicJson(importedFile, records);
+        return json(res, 200, records[index]);
+      }
+      if (wardrobeItemMatch && req.method === "DELETE") {
+        const id = wardrobeItemMatch[1];
         const records = await loadImported();
         const next = records.filter((record) => record.id !== id);
         if (next.length === records.length) return json(res, 404, { error: "Imported wardrobe item not found" });
@@ -528,7 +569,7 @@ export function wardrobeImportApi(options = {}) {
         const input = await body(req);
         const image = decodeImage(input);
         const normalizedImage = await normalizeImage(image.data);
-        const detected = (await openAIAnalyze({ ...llm(), model: setting("WARDROBE_VISION_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_VISION_MODEL", "gpt-5.4-mini"))), image: normalizedImage, mime: "image/png" })).map(normalizeMetadata);
+        const detected = (await openAIAnalyze({ ...llm(), model: visionModel(setting), image: normalizedImage, mime: "image/png" })).map(normalizeMetadata);
         const jobs = [];
         for (const metadata of detected) {
           const id = randomUUID();

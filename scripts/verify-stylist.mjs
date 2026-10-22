@@ -106,15 +106,16 @@ try {
       assert.equal(options.headers.Authorization, url.startsWith("http://localhost:11434") ? undefined : "Bearer stylist-key");
       const body = JSON.parse(options.body);
       const prompt = body.messages[0].content;
-      const paletteId = Number(prompt.match(/(?:Wada palettes:|Relevant Wada palettes:)\s*(?:\n)?(?:#|\[\{\"id\":)(\d+)/)?.[1]) || 1;
-      const isRevision = prompt.startsWith("Revise this single outfit");
-      const chosenTop = returnInvalidFirst && !isRevision ? otherTopId : topId;
-      returnInvalidFirst = false;
-      const answer = JSON.stringify({ looks: [{
-        name: isRevision ? "Revised Kyoto look" : "Kyoto walking look",
-        reason: "Olive and blue work with a restrained dark base.",
-        occasion: "Sightseeing", garmentIds: [chosenTop, bottomId, shoeId], paletteId,
-      }] });
+      let answer;
+      if (prompt.startsWith("You are a practical personal stylist planning outfits")) {
+        answer = JSON.stringify({ plan: { formality: [1, 5], maxWarmth: null, outerLayer: "optional", layerMaxWarmth: null, include: [], exclude: [] } });
+      } else if (prompt.startsWith("Revise this look")) {
+        answer = JSON.stringify({ change: null, pieces: ["T1", "B1", "S1"], name: "Revised Kyoto look", reason: "Olive and blue work with a restrained dark base." });
+      } else {
+        const look = returnInvalidFirst ? "L99" : prompt.match(/^(L\d+):/m)[1];
+        returnInvalidFirst = false;
+        answer = JSON.stringify({ picks: [{ look, accessories: [], name: "Kyoto walking look", reason: "Olive and blue work with a restrained dark base." }] });
+      }
       if (body.stream) {
         const midpoint = Math.floor(answer.length / 2);
         const chunks = [
@@ -156,7 +157,7 @@ try {
   assert.equal(forbiddenSelection.status, 400);
   const suggested = await invoke("/suggest", "POST", { tripId, count: 1, selectedItemIds: [topId, bottomId, shoeId], occasion: "Sightseeing", anchorId: topId });
   assert.equal(suggested.status, 201, JSON.stringify(suggested.body));
-  assert.equal(responseCalls, 2, "Invalid planned item should force one retry.");
+  assert.equal(responseCalls, 3, "A plan call, then a pick of an unlisted candidate should force one retry.");
   const look = suggested.body[0];
   assert.deepEqual(look.garmentIds, [topId, bottomId, shoeId]);
   assert.equal(look.warnings[0].itemId, shoeId);
@@ -166,7 +167,7 @@ try {
   returnInvalidFirst = true;
   const streamed = await invoke("/suggest", "POST", { tripId, count: 1, selectedItemIds: [topId, bottomId, shoeId], anchorId: topId }, { accept: "application/x-ndjson" });
   assert.equal(streamed.status, 200);
-  assert.deepEqual(streamed.body.map((event) => event.stage).filter(Boolean), ["preparing", "weather", "model", "thinking", "responding", "checking", "retrying", "model", "thinking", "responding", "checking", "saving"]);
+  assert.deepEqual(streamed.body.map((event) => event.stage).filter(Boolean), ["preparing", "weather", "plan", "candidates", "model", "thinking", "responding", "checking", "retrying", "thinking", "responding", "checking", "saving"]);
   assert.equal(streamed.body.at(-1).type, "done");
   assert.equal(streamed.body.at(-1).looks[0].garmentIds[0], topId);
   assert.equal(imageCalls, 0);
@@ -174,7 +175,7 @@ try {
   failNextSuggestion = true;
   const timedOut = await invoke("/suggest", "POST", { tripId, count: 1, selectedItemIds: [topId, bottomId] }, { accept: "application/x-ndjson" });
   assert.equal(timedOut.status, 200);
-  assert.deepEqual(timedOut.body.map((event) => event.stage).filter(Boolean), ["preparing", "weather", "model"]);
+  assert.deepEqual(timedOut.body.map((event) => event.stage).filter(Boolean), ["preparing", "weather", "plan"]);
   assert.equal(timedOut.body.at(-1).type, "error");
   assert.match(timedOut.body.at(-1).message, /more than five minutes/);
 

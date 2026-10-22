@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ThumbsDown, ThumbsUp } from "@phosphor-icons/react";
 import "./stylist.css";
 
 const PART_NAMES = {
@@ -6,11 +7,13 @@ const PART_NAMES = {
   accessories_up: "Accessories", shoes: "Shoes",
 };
 const PART_ORDER = Object.keys(PART_NAMES);
-const EMPTY_STATE = { trips: [], looks: [], setup: { hasLlm: false, hasImageKey: false, hasReference: false } };
+const EMPTY_STATE = { trips: [], looks: [], wears: [], setup: { hasLlm: false, hasImageKey: false, hasReference: false } };
 const SUGGESTION_STAGES = {
   preparing: "Preparing selected items",
   weather: "Checking destination weather",
-  model: "Asking the stylist",
+  plan: "Setting the dress code and weather plan",
+  candidates: "Building looks from your wardrobe",
+  model: "Asking the stylist to choose",
   thinking: "Considering combinations",
   responding: "Receiving outfit ideas",
   checking: "Checking garments and colors",
@@ -162,11 +165,14 @@ function TripDetails({ trip, items, busy, onSave, onDelete }) {
   );
 }
 
-function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRevise, onPhoto, onSave, onDate, onDelete, hideHeading = false }) {
+function LookCard({ look, items, trip, setup, busy, wears, revision, setRevision, onRevise, onPhoto, onSave, onDate, onDelete, onVerdict, onWear, onUnwear, hideHeading = false }) {
   const garments = look.garmentIds.map((id) => items.find((item) => item.id === id)).filter(Boolean);
   const currentWarnings = trip ? garments.filter((item) => trip.items?.[item.id] === "worn").map((item) => `${item.name} is marked worn or in laundry.`) : [];
   const unavailable = trip ? garments.filter((item) => !["packed", "worn"].includes(trip.items?.[item.id])) : [];
   const warnings = [...new Set([...currentWarnings, ...unavailable.map((item) => `${item.name} is no longer packed.`)])];
+  const todayDate = new Date().toLocaleDateString("en-CA");
+  const wornToday = wears.find((wear) => wear.date === todayDate);
+  const lastWear = [...wears].sort((a, b) => b.date.localeCompare(a.date))[0];
   const photoMissing = !setup.hasImageKey ? "Add an image API key to enable modeled photos." : !setup.hasReference ? "Add a model reference photo to enable modeled photos." : "";
   return (
     <article className="stylist-look">
@@ -186,6 +192,7 @@ function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRev
             {look.palette.colors.map((color) => <span className="stylist-swatch" key={color.name} title={`${color.name} ${color.hex}`} style={{ background: color.hex }} />)}
           </div>}
           {look.weather && <p className="stylist-small">Conditions: {look.weather}</p>}
+          {lastWear && !wornToday && <p className="stylist-small">Last worn {lastWear.date}</p>}
           {warnings.map((warning) => <p className="stylist-warning" key={warning}>{warning}</p>)}
           {look.error && <p className="stylist-warning">{look.error}</p>}
           {look.status === "generating" && <p className="stylist-small" role="status">Generating the modeled photo. This may take a few minutes.</p>}
@@ -201,6 +208,14 @@ function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRev
         {["idea", "failed", "review"].includes(look.status) && <button className="stylist-primary" type="button" disabled={busy || unavailable.length > 0 || Boolean(photoMissing)} title={photoMissing || undefined} onClick={() => onPhoto(look.id)}>{look.status === "review" ? "Regenerate photo" : "See how it looks"}</button>}
         {!look.savedAt && look.status !== "generating" && <button className="stylist-secondary" type="button" disabled={busy || unavailable.length > 0} onClick={() => onSave(look.id)}>Save outfit</button>}
         {look.savedAt && trip && <label className="stylist-day">Wear on<input type="date" value={look.date || ""} min={trip.startDate || undefined} max={trip.endDate || undefined} disabled={busy} onChange={(event) => onDate(look.id, event.target.value)} /></label>}
+        <button className="stylist-secondary" type="button" disabled={busy} aria-pressed={Boolean(wornToday)} onClick={() => wornToday ? onUnwear(wornToday.id) : onWear(look.id)}>{wornToday ? "Worn today" : "Wore it"}</button>
+        <span className="stylist-verdict" role="group" aria-label={`Rate ${look.name}`}>
+          {[["up", ThumbsUp, "Good look"], ["down", ThumbsDown, "Not for me"]].map(([value, Icon, label]) => (
+            <button key={value} type="button" className={look.verdict === value ? "active" : ""} aria-pressed={look.verdict === value} aria-label={label} title={label} disabled={busy} onClick={() => onVerdict(look.id, look.verdict === value ? null : value)}>
+              <Icon size={17} weight={look.verdict === value ? "fill" : "regular"} aria-hidden="true" />
+            </button>
+          ))}
+        </span>
         <button className="stylist-text-button danger" type="button" disabled={busy} onClick={() => onDelete(look.id)}>Delete look</button>
       </div>
     </article>
@@ -245,7 +260,12 @@ export function Stylist({ items, view, onNavigate }) {
 
   const act = async (action, success) => {
     setBusy(true); setError(""); setNotice("");
-    try { await action(); await refresh(); if (success) setNotice(success); return true; }
+    try {
+      const result = await action();
+      await refresh();
+      if (success) setNotice(typeof success === "function" ? success(result) : success);
+      return true;
+    }
     catch (failure) { setError(failure.message); return false; }
     finally { setBusy(false); }
   };
@@ -288,7 +308,7 @@ export function Stylist({ items, view, onNavigate }) {
     const lookTrip = state.trips.find((entry) => entry.id === look.tripId) || null;
     const card = <LookCard
       key={look.id} look={look} items={items} trip={lookTrip} hideHeading={savedView}
-      setup={state.setup} busy={busy}
+      setup={state.setup} busy={busy} wears={(state.wears || []).filter((wear) => wear.lookId === look.id)}
       revision={revision[look.id]} setRevision={setRevision}
       onRevise={(id) => act(async () => { await request(`/looks/${id}/revise`, "POST", { message: revision[id] }); setRevision(id, ""); }, "Look revised.")}
       onPhoto={(id) => act(() => request(`/looks/${id}/photo`, "POST"), "Photo generation started.")}
@@ -300,6 +320,9 @@ export function Stylist({ items, view, onNavigate }) {
       }}
       onDate={(id, date) => act(() => request(`/looks/${id}`, "PATCH", { date }))}
       onDelete={deleteLook}
+      onVerdict={(id, verdict) => act(() => request(`/looks/${id}/verdict`, "POST", { verdict }))}
+      onWear={(id) => act(() => request(`/looks/${id}/wear`, "POST", {}), "Logged as worn today.")}
+      onUnwear={(wearId) => act(() => request(`/wears/${wearId}`, "DELETE"))}
     />;
     if (!savedView) return card;
     const garments = look.garmentIds.map((id) => items.find((item) => item.id === id)).filter(Boolean);
@@ -362,7 +385,9 @@ export function Stylist({ items, view, onNavigate }) {
               await act(() => requestSuggestions({ tripId: trip?.id || null, selectedItemIds: requestItems.map((item) => item.id), count: Number(count), occasion, conditions, brief, anchorId: requestItems.some((item) => item.id === anchorId) ? anchorId : "" }, (stage) => {
                 setSuggestionProgress((current) => current && current.stages.at(-1) !== stage
                   ? { ...current, stages: [...current.stages, stage] } : current);
-              }), "Draft looks saved. Revise one or make its photo.");
+              }), (looks) => looks.length < Number(count)
+                ? `Only ${looks.length} distinct ${looks.length === 1 ? "look fits" : "looks fit"} this request with the selected items. Revise one or make its photo.`
+                : "Draft looks saved. Revise one or make its photo.");
               setSuggestionProgress(null);
             }}>
               <details className="stylist-item-picker"><summary>Choose items for this request <span>{requestItems.length} of {available.length} selected</span></summary>

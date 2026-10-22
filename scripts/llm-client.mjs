@@ -7,6 +7,10 @@ export function llmSettings(setting) {
   };
 }
 
+export function visionModel(setting) {
+  return setting("WARDROBE_VISION_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_VISION_MODEL", "gpt-5.4-mini")));
+}
+
 export function imageSettings(setting) {
   return {
     key: setting("OPENAI_IMAGE_API_KEY") || setting("OPENAI_API_KEY"),

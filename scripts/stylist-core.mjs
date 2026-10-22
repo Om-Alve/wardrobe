@@ -11,6 +11,7 @@ for (const color of colors) {
 
 const HEX = /^#[0-9a-f]{6}$/i;
 const PARTS = new Set(["upperbody", "lowerbody", "wholebody_up", "accessories_up", "shoes"]);
+const CLOTHING_PARTS = new Set(["upperbody", "lowerbody", "wholebody_up"]);
 export const PACK_STATES = new Set(["planned", "packed", "worn"]);
 
 function rgb(hex) {
@@ -25,10 +26,11 @@ function distance(first, second) {
 
 export function relevantPalettes(items, limit = 10, anchorId = "") {
   const garmentColors = items
+    .filter((item) => CLOTHING_PARTS.has(item.part))
     .flatMap((item) => [item.color, item.secondaryColor])
     .filter((hex) => typeof hex === "string" && HEX.test(hex));
   if (!garmentColors.length) return [];
-  const anchor = items.find((item) => item.id === anchorId);
+  const anchor = items.find((item) => item.id === anchorId && CLOTHING_PARTS.has(item.part));
   const anchorColors = [anchor?.color, anchor?.secondaryColor].filter((hex) => typeof hex === "string" && HEX.test(hex));
   return [...paletteMap.entries()].map(([id, swatches]) => ({
     id,
@@ -49,7 +51,7 @@ export function eligibleItems(trip, library) {
   return library.filter((item) => ["packed", "worn"].includes(trip.items?.[item.id]));
 }
 
-export function validateLook(value, availableItems, palettes = []) {
+export function validateLook(value, availableItems) {
   const byId = new Map(availableItems.map((item) => [item.id, item]));
   const ids = value?.garmentIds;
   if (!Array.isArray(ids) || ids.length < 2 || ids.length > 6 || new Set(ids).size !== ids.length) {
@@ -62,9 +64,7 @@ export function validateLook(value, availableItems, palettes = []) {
       || counts.wholebody_up > 1 || counts.accessories_up > 2 || counts.shoes > 1) {
     throw new Error("A look needs one top and one bottom, with at most one layer, two accessories, and pair of shoes.");
   }
-  const requestedPalette = Number(value.paletteId);
-  const palette = palettes.find((entry) => entry.id === requestedPalette) || null;
-  if (palettes.length && !palette) throw new Error("A look must cite one of the suggested Wada palettes.");
+  const palette = relevantPalettes(garments, 1)[0] || null;
   return {
     name: String(value.name || "New look").trim().slice(0, 80) || "New look",
     reason: String(value.reason || "").trim().slice(0, 500),

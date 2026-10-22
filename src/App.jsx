@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Plus, Trash, X } from "@phosphor-icons/react";
 import { WardrobeImportFlow } from "./import-flow.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
+import { fieldsForPart, valueLabel } from "../scripts/garment-attributes.mjs";
 import { Stylist } from "./Stylist.jsx";
 
 const STORAGE_KEY = "open-wardrobe-edits-v1";
@@ -29,16 +30,30 @@ function readEdits() {
 }
 
 
-function persistEdit(item) {
-  const edits = readEdits();
-  edits[item.id] = {
-    name: item.name || "",
-    part: item.part,
-    color: item.color || null,
-    secondaryColor: item.secondaryColor || null,
-    tags: item.tags || [],
-  };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(edits));
+async function saveRemoteItem(item) {
+  const response = await fetch(`/api/import/wardrobe/${item.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: item.name || "",
+      part: item.part,
+      color: item.color || null,
+      secondaryColor: item.secondaryColor || null,
+      tags: item.tags || [],
+      ...(item.attributes !== undefined ? { attributes: item.attributes } : {}),
+    }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || "Could not save the item.");
+  return result;
+}
+
+function draftFrom(item) {
+  return { name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])], attributes: { ...(item.attributes || {}) } };
+}
+
+function attributesKey(attributes = {}) {
+  return JSON.stringify(Object.entries(attributes).filter(([, value]) => value !== null && value !== undefined).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 function removePersistedEdit(id) {
@@ -335,6 +350,32 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
         <span>Details</span>
         <TagEditor tags={draft.tags} onChange={(tags) => setDraft((current) => ({ ...current, tags }))} />
       </div>
+
+      <fieldset className="style-field">
+        <legend>Style</legend>
+        <div className="style-grid">
+          {fieldsForPart(draft.part).map((field) => {
+            const value = draft.attributes?.[field.key];
+            return (
+              <label className="field" key={field.key}>
+                <span>{field.label}</span>
+                <select
+                  value={value === undefined || value === null ? "" : String(value)}
+                  onChange={(event) => {
+                    const next = event.target.value === "" ? null : field.values.find((option) => String(option) === event.target.value);
+                    setDraft((current) => ({ ...current, attributes: { ...current.attributes, [field.key]: next } }));
+                  }}
+                >
+                  <option value="">—</option>
+                  {field.values.map((option) => (
+                    <option value={String(option)} key={String(option)}>{field.names ? `${option} · ${valueLabel(field, option)}` : valueLabel(field, option)}</option>
+                  ))}
+                </select>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
     </div>
   );
 }
@@ -347,7 +388,7 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
   const [sampling, setSampling] = useState(null);
   const [sampleStatus, setSampleStatus] = useState("");
   const [palette, setPalette] = useState(item.palette || []);
-  const [draft, setDraft] = useState({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+  const [draft, setDraft] = useState(() => draftFrom(item));
   const [shaking, setShaking] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
@@ -365,12 +406,14 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
       color: draft.color?.toLowerCase() || null,
       secondaryColor: draft.secondaryColor?.toLowerCase() || null,
       tags: normalizedTags(draft.tags),
+      attributes: attributesKey(draft.attributes),
     }) !== JSON.stringify({
       name: (item.name || "").trim(),
       part: item.part,
       color: item.color?.toLowerCase() || null,
       secondaryColor: item.secondaryColor?.toLowerCase() || null,
       tags: normalizedTags(item.tags || []),
+      attributes: attributesKey(item.attributes),
     });
   }, [draft, item]);
 
@@ -415,20 +458,21 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
     setSampling(null);
     setSampleStatus("");
     setPalette(item.palette || []);
-    setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+    setDraft(draftFrom(item));
   }, [item]);
 
   const cancelEditing = () => {
-    setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+    setDraft(draftFrom(item));
     setSampling(null);
     setSampleStatus("");
     onClose();
   };
 
-  const saveEditing = () => {
-    onSave({ ...item, ...draft, name: draft.name.trim(), tags: draft.tags.map((tag) => tag.trim()).filter(Boolean) });
+  const saveEditing = async () => {
+    const attributesChanged = attributesKey(draft.attributes) !== attributesKey(item.attributes);
     setSampling(null);
-    setSampleStatus("Changes saved.");
+    const problem = await onSave({ ...item, ...draft, name: draft.name.trim(), tags: draft.tags.map((tag) => tag.trim()).filter(Boolean), attributes: attributesChanged ? draft.attributes : undefined });
+    setSampleStatus(problem || "Changes saved.");
   };
 
   const handleImageLoad = (event) => {
@@ -552,11 +596,21 @@ export function App() {
         if (!response.ok) throw new Error("Could not load the wardrobe.");
         return response.json();
       })
-      .then((loadedItems) => {
+      .then(async (loadedItems) => {
         const edits = readEdits();
         const deleted = readDeletedItems();
         const visibleItems = loadedItems.filter((item) => !deleted.has(item.id));
-        setItems(visibleItems.map((item) => ({ ...item, ...(edits[item.id] || {}) })));
+        // Older versions kept edits in this browser only; move them to the library so the stylist sees them.
+        setItems(await Promise.all(visibleItems.map(async (item) => {
+          if (!edits[item.id]) return item;
+          try {
+            const saved = await saveRemoteItem({ ...item, ...edits[item.id], attributes: undefined });
+            removePersistedEdit(item.id);
+            return saved;
+          } catch {
+            return { ...item, ...edits[item.id] };
+          }
+        })));
       })
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
@@ -580,9 +634,14 @@ export function App() {
     setSelectedId(null);
   };
 
-  const saveItem = (updatedItem) => {
-    setItems((current) => current.map((item) => item.id === updatedItem.id ? updatedItem : item));
-    persistEdit(updatedItem);
+  const saveItem = async (updatedItem) => {
+    try {
+      const saved = await saveRemoteItem(updatedItem);
+      setItems((current) => current.map((item) => item.id === saved.id ? saved : item));
+      return "";
+    } catch (requestError) {
+      return requestError.message;
+    }
   };
 
   const deleteItem = async (id) => {

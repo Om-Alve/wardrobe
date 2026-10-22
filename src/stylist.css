@@ -259,6 +259,19 @@
 .stylist-revise-form input { flex: 1; }
 .stylist-look-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 16px; }
 .stylist-look-actions .danger { margin-left: auto; }
+.stylist-verdict { display: inline-flex; gap: 2px; }
+.stylist-verdict button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.stylist-verdict button:hover:not(:disabled) { border-color: var(--line); color: var(--ink); }
+.stylist-verdict button.active { color: var(--ink); }
 .stylist-day { flex-direction: row !important; align-items: center; gap: 8px !important; }
 .stylist-day input { min-width: 150px; }
 .stylist-credit { margin: 0; color: var(--muted); font-size: 11px; }

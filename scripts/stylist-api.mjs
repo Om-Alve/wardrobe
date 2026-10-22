@@ -2,12 +2,26 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import { deriveFeedback, today } from "./feedback.mjs";
+import { describeItem, normalizeAttributes } from "./garment-attributes.mjs";
+import { assignHandles, buildShortlist, candidateLine, describePlan, enumerateLooks, partLabel, scoreLook, singleChanges, validatePicks, validatePlan } from "./outfit-engine.mjs";
 import { eligibleItems, PACK_STATES, relevantPalettes, validateLook, warningsFor } from "./stylist-core.mjs";
 import { chatJson, imageSettings, llmSettings } from "./llm-client.mjs";
 
 const BASE = "/api/stylist";
-const EMPTY = { version: 1, trips: [], looks: [] };
+const EMPTY = { version: 1, trips: [], looks: [], wears: [], swaps: [] };
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const PLAN_SHAPE = '{"plan":{"formality":[lowest,highest],"shoeFormality":[lowest,highest],"maxWarmth":<0-4 or null>,"outerLayer":"needed|optional|skip","layerMaxWarmth":<0-4 or null>,"include":["handle"],"exclude":["handle"]}}';
+const REVISE_SHAPE = '{"change":"V1" or null,"pieces":["T1","B1"] or null,"name":"...","reason":"..."}';
+const PLAN_GUIDANCE = `Set one plan for this request from the occasion, the conditions, and the user's request.
+- formality: [lowest, highest] on the 1-5 scale (1 athletic, 2 casual, 3 smart casual, 4 dressy or business, 5 formal): the range the occasion calls for, widened only when the user asks for deliberate high-low dressing.
+- shoeFormality: [lowest, highest] for shoes, which can sit apart from the clothes; for example, athletic sneakers (1) suit a day of walking even with casual clothes.
+- maxWarmth: the warmest top, bottoms, or shoes the conditions allow, on the 0-4 scale (0 hot weather only, 1 light, 2 medium, 3 warm, 4 cold-weather outerwear), or null when the weather sets no limit.
+- outerLayer: "needed", "optional", or "skip". When the day swings between cool and warm, dress the base for the warm part and plan a removable layer for the cool part.
+- layerMaxWarmth: the warmest outer layer that suits the conditions, 0-4, or null.
+- include: handles of pieces the user explicitly asks to wear, otherwise an empty list.
+- exclude: handles of pieces the user explicitly rules out, otherwise an empty list.`;
+const STYLING_GUIDANCE = "Each item lists its colors (lightness, temperature, and whether each is a base neutral, earth neutral, or accent), formality from 1 (athletic) to 5 (formal), warmth from 0 (hot weather) to 4 (cold weather), and its fabric, pattern, and fit when known. Build from the bottoms and top first. Let base and earth neutrals carry most of the outfit and use at most two accent colors. When pieces share a color family, step the lightness clearly or vary the texture so they do not read as a near miss. Wear at most one statement piece and at most two patterns, at different scales. Tuck shirts that have tails. Add a bag or watch only when it serves the occasion or was requested; accessories do not define the clothing colors. If the wardrobe lacks a piece the occasion needs, leave that slot out and say what is missing in the reason. Use Wada combinations only as loose color inspiration. In the reason, describe the actual garment colors and why the pieces work together; do not cite palette numbers or claim colors the outfit does not contain.";
 
 function bad(message, status = 400) {
   return Object.assign(new Error(message), { status });
@@ -51,16 +65,27 @@ async function atomicJson(file, value) {
   await rename(temporary, file);
 }
 
-async function requestLooks({ key, baseUrl, model, prompt, count, onProgress, signal }) {
-  let parsed;
+async function askModel({ key, baseUrl, model, prompt, shape, onProgress, signal }) {
   try {
-    parsed = await chatJson({ key, baseUrl, model, prompt: `${prompt}\nReturn JSON in this exact shape: {"looks":[{"name":"...","reason":"...","occasion":"...","garmentIds":["item-id"],"paletteId":1}]}. Include exactly ${count} looks.`, timeout: 300000, onProgress, signal });
+    return await chatJson({ key, baseUrl, model, prompt: `${prompt}\nReturn JSON in this exact shape: ${shape}.`, timeout: 300000, onProgress, signal });
   } catch (error) {
     if (error.name === "TimeoutError") throw bad("The LLM took more than five minutes. Try fewer looks or a smaller item selection.", 504);
     throw bad(`The LLM could not suggest outfits: ${error.message}`, 502);
   }
-  if (!Array.isArray(parsed.looks) || parsed.looks.length !== count) throw bad("The LLM returned the wrong number of looks.", 502);
-  return parsed.looks;
+}
+
+// Asks once, and once more with the reason when the answer fails its check.
+async function askUntilValid({ check, failure, onRetry, prompt, ...request }) {
+  let feedback = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await askModel({ ...request, prompt: feedback ? `${prompt}\nYour previous answer was rejected: ${feedback} Answer again.` : prompt });
+    try { return check(raw); }
+    catch (error) {
+      if (attempt) throw bad(`${failure}: ${error.message}`, 502);
+      feedback = error.message;
+      onRetry?.();
+    }
+  }
 }
 
 async function requestPhoto({ key, baseUrl, model, quality, prompt, images }) {
@@ -127,7 +152,7 @@ export function stylistApi(options = {}) {
   const llm = () => llmSettings(setting);
   const image = () => imageSettings(setting);
   const load = () => readJson(stateFile, EMPTY);
-  const library = () => readJson(path.join(root, setting("WARDROBE_DATA_DIR", "data"), "library.json"), []);
+  const library = () => readJson(path.join(path.resolve(root, setting("WARDROBE_DATA_DIR", "data")), "library.json"), []);
   const transact = (change) => {
     const action = queue.then(async () => {
       const state = await load();
@@ -161,7 +186,7 @@ export function stylistApi(options = {}) {
       const images = [{ name: "person.png", data: await readFile(reference) }];
       for (const item of garments) {
         if (!item.image?.startsWith("/api/import/library/")) throw bad(`No local image for ${item.name}.`);
-        images.push({ name: `${item.part}.png`, data: await readFile(path.join(root, setting("WARDROBE_DATA_DIR", "data"), "imported", path.basename(new URL(item.image, "http://localhost").pathname))) });
+        images.push({ name: `${item.part}.png`, data: await readFile(path.join(path.resolve(root, setting("WARDROBE_DATA_DIR", "data")), "imported", path.basename(new URL(item.image, "http://localhost").pathname))) });
       }
       const list = garments.map((item) => `${item.part}: ${item.name} (${item.color}; ${item.tags?.join(", ") || "no tags"})`).join("\n");
       const prompt = `Create one photorealistic full-length modeled outfit photograph of the person in the FIRST reference image. Every later reference is an exact wardrobe item to put on the person. Preserve identity, face, build, skin tone, and hair. Use ALL and ONLY these selected pieces, keeping exact color, fabric, cut, pattern, logos, closures, and proportions:\n${list}\nOutfit: ${look.name}. Occasion: ${look.occasion || "everyday"}. ${look.reason}\nMake the top and bottom clearly visible. Layer garments naturally. If no shoes were selected, crop above the feet rather than inventing footwear. Do not add extra garments, accessories, people, words, or watermarks. Natural editorial photograph, anatomically plausible, plain unobtrusive background.`;
@@ -196,7 +221,7 @@ export function stylistApi(options = {}) {
     if (!url.pathname.startsWith(BASE)) return next();
     try {
       if (url.pathname === `${BASE}/state` && req.method === "GET") {
-        return send(res, 200, { ...await load(), setup: await setup() });
+        return send(res, 200, { wears: [], swaps: [], ...await load(), setup: await setup() });
       }
       if (url.pathname === `${BASE}/weather` && req.method === "GET") {
         const destination = field(url.searchParams.get("destination"), 100);
@@ -298,36 +323,51 @@ export function stylistApi(options = {}) {
         }
         const occasion = field(body.occasion, 100);
         const brief = field(body.brief, 600);
-        const itemsText = available.map((item) => `${item.id} | ${item.part} | ${item.name} | ${item.color} | ${item.secondaryColor || ""} | ${item.tags?.join(", ") || ""}${trip?.items[item.id] === "worn" ? " | WORN/LAUNDRY: warn if used" : ""}`).join("\n");
+        const model = setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini")));
+        const signal = AbortSignal.any([AbortSignal.timeout(300000), disconnected.signal]);
+        const { handleOf, itemOf, sorted } = assignHandles(available);
+        const wornNote = (item) => trip?.items[item.id] === "worn" ? " | worn on this trip; use only if needed" : "";
+        const conditionsText = weather?.days?.length
+          ? `${weather.summary}\n${weather.days.map((day) => `${day.date}: ${Math.round(day.low)}-${Math.round(day.high)}°C, rain chance ${day.rain}%`).join("\n")}`
+          : weather?.summary || "not supplied; do not assume a forecast";
+        const context = `Occasion: ${occasion || "everyday"}\nConditions: ${conditionsText}\nUser request: ${brief || "comfortable, considered outfits"}`;
+
+        emit("plan");
+        const planLines = sorted.map((item) => {
+          const { formality, warmth } = normalizeAttributes(item.attributes, item.part);
+          return `${handleOf.get(item.id)} | ${partLabel(item.part)} | ${item.name} | formality ${formality ?? "unknown"}, warmth ${warmth ?? "unknown"}`;
+        });
+        const plan = await askUntilValid({
+          ...llm(), model, signal, shape: PLAN_SHAPE, failure: "The LLM did not return a usable plan", onRetry: () => emit("retrying"),
+          prompt: `You are a practical personal stylist planning outfits. ${PLAN_GUIDANCE}\n\n${context}\n\nItems:\n${planLines.join("\n")}`,
+          check: (raw) => validatePlan(raw.plan, itemOf),
+        });
+
+        emit("candidates");
+        const feedback = deriveFeedback(state, await library());
+        const { looks: pool, gaps } = enumerateLooks(available, plan, { anchorId, rejectedSets: feedback.rejectedSets, rejectedPairs: feedback.rejectedPairs });
+        if (!pool.length) throw bad(`No combination in this selection fits the request. ${gaps.join(" ")}`.trim(), 422);
+        const shortlist = buildShortlist(pool.map((look) => ({ ...look, ...scoreLook(look, feedback) })));
+        const want = Math.min(count, shortlist.length);
+        const accessories = new Map(sorted.filter((item) => item.part === "accessories_up").map((item) => [handleOf.get(item.id), item]));
+        const required = [anchorId, ...plan.include].map((id) => available.find((item) => item.id === id)).filter((item) => item?.part === "accessories_up");
+        const used = new Set(shortlist.flatMap((look) => look.ids));
+        const legend = sorted.filter((item) => used.has(item.id)).map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
+        const accessoryLegend = [...accessories.values()].map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
         const palettesText = palettes.map((palette) => `#${palette.id}: ${palette.colors.map((color) => `${color.name} ${color.hex}`).join(", ")}`).join("\n");
-        const prompt = `You are a practical personal stylist. Propose exactly ${count} distinct outfits using ONLY the item IDs listed below. Every look needs exactly one upperbody and one lowerbody item, with at most one wholebody_up, two accessories_up, and one shoes item. Include the anchor item ${anchorId || "(none specified)"} in every look if one is specified. Keep outfits wearable for the occasion, weather, and actual garment tags. Vary garments across looks. Use Sanzo Wada's color combinations as inspiration, not a rigid match; black, white, cream, grey, and brown may serve as neutrals. Pick paletteId from the reference combinations below. Explain the color and practical clothing fit briefly. Do not invent garments.\n\nOccasion: ${occasion || "everyday"}\nConditions: ${weather?.summary || "not supplied; do not assume a forecast"}\nUser request: ${brief || "comfortable, considered outfits"}\n\nAvailable items:\n${itemsText}\n\nRelevant Wada palettes:\n${palettesText}`;
-        let raw;
-        let ideas;
-        const deadline = AbortSignal.timeout(300000);
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          emit("model");
-          raw = await requestLooks({
-            ...llm(),
-            model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
-            prompt: attempt ? `${prompt}\nYour previous answer had invalid or repeated item combinations. Follow all constraints exactly.` : prompt,
-            count, onProgress: streaming ? emit : undefined,
-            signal: AbortSignal.any([deadline, disconnected.signal]),
-          });
-          emit("checking");
-          try {
-            ideas = raw.map((entry) => validateLook(entry, available, palettes));
-            if (anchorId && ideas.some((entry) => !entry.garmentIds.includes(anchorId))) throw new Error("Anchor item missing.");
-            const signatures = ideas.map((entry) => [...entry.garmentIds].sort().join("|"));
-            if (new Set(signatures).size !== signatures.length) throw new Error("Repeated garment combination.");
-            break;
-          } catch (error) {
-            if (attempt) throw bad(`The LLM did not return usable looks: ${error.message}`, 502);
-            emit("retrying");
-          }
-        }
+        const pickPrompt = `You are a practical personal stylist. Choose exactly ${want} looks for this request from the candidates below. Every candidate already fits the plan, the weather, and the selected wardrobe, so judge which combine best for the occasion and the user's request: color, texture, proportion, and variety. Choose looks that differ in top or bottom whenever the candidates allow. Notes after a candidate come from the user's own history. You may add up to two accessories (A handles) to a look when they serve the occasion or the request${required.length ? `; every look must include ${required.map((item) => handleOf.get(item.id)).join(" and ")}` : ""}. ${gaps.length ? "Mention the relevant gap briefly in the reason. " : ""}${STYLING_GUIDANCE}\n\n${context}\nPlan: ${describePlan(plan)}.${gaps.length ? `\nGaps: ${gaps.join(" ")}` : ""}\n\nPieces:\n${legend.join("\n")}\n\nAccessories:\n${accessoryLegend.join("\n") || "none"}\n\nCandidates:\n${shortlist.map((look) => candidateLine(look, handleOf)).join("\n")}\n\nRelevant Wada palettes:\n${palettesText}`;
+
+        emit("model");
+        const picks = await askUntilValid({
+          ...llm(), model, signal, onProgress: streaming ? emit : undefined, onRetry: () => emit("retrying"),
+          shape: `{"picks":[{"look":"L1","accessories":["A1"],"name":"...","reason":"..."}]} with exactly ${want} picks`,
+          failure: "The LLM did not return usable looks", prompt: pickPrompt,
+          check: (raw) => { emit("checking"); return validatePicks(raw, shortlist, accessories, want, { required }); },
+        });
+        const ideas = picks.map((pick) => validateLook({ name: pick.name, reason: pick.reason, occasion: occasion || "everyday", garmentIds: pick.garmentIds }, available));
         const now = new Date().toISOString();
         const looks = ideas.map((idea) => ({
-          ...idea, id: randomUUID(), tripId: trip?.id || null, anchorId: anchorId || null,
+          ...idea, plan, gaps, id: randomUUID(), tripId: trip?.id || null, anchorId: anchorId || null, verdict: null,
           selectionIds: selectedIds, status: "idea",
           warnings: warningsFor(idea, trip), weather: weather?.summary || "",
           weatherSource: weather?.source || null, image: null, error: null,
@@ -348,7 +388,42 @@ export function stylistApi(options = {}) {
         }
         return send(res, 201, looks);
       }
-      const lookMatch = url.pathname.match(/^\/api\/stylist\/looks\/([a-f0-9-]{36})(?:\/(revise|photo|save))?$/);
+      const wearMatch = url.pathname.match(/^\/api\/stylist\/wears\/([a-f0-9-]{36})$/);
+      if (wearMatch && req.method === "DELETE") {
+        await transact((state) => {
+          if (!(state.wears || []).some((entry) => entry.id === wearMatch[1])) throw bad("Wear not found.", 404);
+          state.wears = state.wears.filter((entry) => entry.id !== wearMatch[1]);
+        });
+        return send(res, 200, { deleted: true });
+      }
+      const lookMatch = url.pathname.match(/^\/api\/stylist\/looks\/([a-f0-9-]{36})(?:\/(revise|photo|save|verdict|wear))?$/);
+      if (lookMatch && req.method === "POST" && lookMatch[2] === "verdict") {
+        const body = await input(req);
+        if (![null, "up", "down"].includes(body.verdict ?? null)) throw bad('Set the verdict to "up", "down", or null.');
+        const look = await transact((state) => {
+          const current = state.looks.find((entry) => entry.id === lookMatch[1]);
+          if (!current) throw bad("Look not found.", 404);
+          current.verdict = body.verdict ?? null;
+          current.verdictAt = current.verdict ? new Date().toISOString() : null;
+          current.updatedAt = new Date().toISOString();
+          return current;
+        });
+        return send(res, 200, look);
+      }
+      if (lookMatch && req.method === "POST" && lookMatch[2] === "wear") {
+        const body = await input(req);
+        const known = new Set((await library()).map((item) => item.id));
+        const wear = await transact((state) => {
+          const current = state.looks.find((entry) => entry.id === lookMatch[1]);
+          if (!current) throw bad("Look not found.", 404);
+          const garmentIds = [...new Set(Array.isArray(body.garmentIds) ? body.garmentIds : current.garmentIds)].filter((id) => known.has(id));
+          if (!garmentIds.length) throw bad("Choose at least one worn item.");
+          const entry = { id: randomUUID(), lookId: current.id, date: dateField(body.date) || today(), garmentIds, at: new Date().toISOString() };
+          state.wears = [...(state.wears || []), entry];
+          return entry;
+        });
+        return send(res, 201, wear);
+      }
       if (lookMatch && req.method === "POST" && lookMatch[2] === "revise") {
         const body = await input(req);
         const message = field(body.message, 600);
@@ -362,24 +437,40 @@ export function stylistApi(options = {}) {
         if (current.tripId && !trip) throw bad("Trip not found.", 404);
         const selectedSet = new Set(current.selectionIds || []);
         const available = eligibleItems(trip, await library()).filter((item) => selectedSet.has(item.id));
-        const palettes = relevantPalettes(available, 10, current.anchorId);
-        const prompt = `Revise this single outfit according to the user's request. Use ONLY these wardrobe item IDs. Return exactly one complete look with one upperbody and one lowerbody item, plus at most one layer, two accessories, and shoes. ${current.anchorId ? `Keep anchor item ${current.anchorId} in the look.` : ""} Use Wada palettes for inspiration, with neutrals allowed. Keep the user's intended occasion and weather in mind.\nCurrent look: ${JSON.stringify({ name: current.name, reason: current.reason, garmentIds: current.garmentIds, occasion: current.occasion })}\nConversation: ${JSON.stringify(current.messages.slice(-8))}\nLatest request: ${message}\nWeather: ${current.weather || "not supplied"}\nItems: ${JSON.stringify(available.map(({ id, name, part, color, tags }) => ({ id, name, part, color, tags })))}\nWada palettes: ${JSON.stringify(palettes)}`;
-        const response = await requestLooks({
-          ...llm(),
-          model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))), prompt, count: 1,
+        const { handleOf, itemOf, sorted } = assignHandles(available);
+        const options = singleChanges(current.garmentIds, available, handleOf, { anchorId: current.anchorId });
+        const prompt = `Revise this look for the user's latest request. Prefer the smallest change that answers it: when one of the single changes below does, return its label as "change" and set "pieces" to null. Only when the request needs more than one change, set "change" to null and give the complete look as "pieces": one top and one bottom, plus at most one outer layer, one pair of shoes, and two accessories. ${current.anchorId ? `Keep ${handleOf.get(current.anchorId)} in the look. ` : ""}${STYLING_GUIDANCE}\nCurrent look: ${current.garmentIds.map((id) => handleOf.get(id)).filter(Boolean).join(" + ")}; ${current.name}: ${current.reason}\nConversation: ${JSON.stringify(current.messages.slice(-8))}\nLatest request: ${message}\nOccasion: ${current.occasion || "everyday"}\nWeather: ${current.weather || "not supplied"}\n\nPieces:\n${sorted.map((item) => describeItem(item, handleOf.get(item.id))).join("\n")}\n\nSingle changes:\n${options.map((option) => `${option.label}: ${option.text}`).join("\n") || "none"}`;
+        const idea = await askUntilValid({
+          ...llm(), model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
+          prompt, shape: REVISE_SHAPE, failure: "The LLM returned an invalid revision",
+          check: (raw) => {
+            let ids;
+            if (raw.change) {
+              const option = options.find((entry) => entry.label === raw.change);
+              if (!option) throw new Error(`"${raw.change}" is not one of the listed changes.`);
+              ids = option.ids;
+            } else {
+              if (!Array.isArray(raw.pieces)) throw new Error('Give either "change" or "pieces".');
+              const unknown = raw.pieces.filter((handle) => !itemOf.has(handle));
+              if (unknown.length) throw new Error(`Use listed handles only; ${unknown.join(", ")} is not listed.`);
+              ids = raw.pieces.map((handle) => itemOf.get(handle).id);
+            }
+            const look = validateLook({ name: raw.name, reason: raw.reason, occasion: current.occasion, garmentIds: ids }, available);
+            if (current.anchorId && !look.garmentIds.includes(current.anchorId)) throw new Error("Keep the anchor piece in the look.");
+            return look;
+          },
         });
-        let idea;
-        try {
-          idea = validateLook(response[0], available, palettes);
-          if (current.anchorId && !idea.garmentIds.includes(current.anchorId)) throw new Error("Anchor item missing.");
-        }
-        catch (error) { throw bad(`The LLM returned an invalid revision: ${error.message}`, 502); }
         const updated = await transact(async (latest) => {
           const target = latest.looks.find((entry) => entry.id === lookMatch[1]);
           if (!target || !["idea", "failed"].includes(target.status)) throw bad("Draft changed while revising.", 409);
           const latestTrip = target.tripId ? latest.trips.find((entry) => entry.id === target.tripId) : null;
           const currentIds = new Set(eligibleItems(latestTrip, await library()).map((item) => item.id));
           if (idea.garmentIds.some((id) => !currentIds.has(id))) throw bad("Available items changed while the stylist was working. Revise again.", 409);
+          const removed = target.garmentIds.filter((id) => !idea.garmentIds.includes(id));
+          const added = idea.garmentIds.filter((id) => !target.garmentIds.includes(id));
+          if (removed.length === 1 && added.length === 1) {
+            latest.swaps = [...(latest.swaps || []), { lookId: target.id, out: removed[0], in: added[0], rest: idea.garmentIds.filter((id) => id !== added[0]), at: new Date().toISOString() }];
+          }
           Object.assign(target, idea, {
             status: "idea", warnings: warningsFor(idea, latestTrip), error: null, image: null,
             messages: [...target.messages, { role: "user", text: message }, { role: "assistant", text: idea.reason }],
