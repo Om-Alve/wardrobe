@@ -42,9 +42,9 @@ export function normalizeCandidates(raw) {
 
 // Distinct top and bottom pairs that can be worn complete for the plan: with shoes, and with a layer when one is needed.
 export function completeOutfits(items, plan, quality) {
-  const { looks, gaps, relaxed } = enumerateLooks(items, plan);
+  const { looks, gaps, notes, relaxed } = enumerateLooks(items, plan);
   const pairs = new Map();
-  if (relaxed.size) return { pairs, gaps };
+  if (relaxed.size) return { pairs, gaps, notes };
   for (const look of looks) {
     if (!look.pieces.some((piece) => piece.part === "shoes")) continue;
     if (plan.outerLayer === "needed" && !look.pieces.some((piece) => piece.part === "wholebody_up")) continue;
@@ -53,7 +53,7 @@ export function completeOutfits(items, plan, quality) {
     const key = look.ids.slice(0, 2).join("|");
     if (!pairs.has(key) || pairs.get(key).score < score) pairs.set(key, { ...look, score });
   }
-  return { pairs, gaps };
+  return { pairs, gaps, notes };
 }
 
 // Style score without personal history, so a purchase is judged on fit with the wardrobe rather than on what was worn lately.
@@ -70,8 +70,8 @@ function judge(items, profile) {
 export function wardrobeCoverage(items, occasions, profile = {}) {
   const quality = judge(items, profile);
   return occasions.map((occasion) => {
-    const { pairs, gaps } = completeOutfits(items, occasion.plan, quality);
-    return { occasion: occasion.name, outfits: pairs.size, gaps };
+    const { pairs, gaps, notes } = completeOutfits(items, occasion.plan, quality);
+    return { occasion: occasion.name, outfits: pairs.size, gaps, notes };
   });
 }
 
@@ -135,7 +135,10 @@ export function rankPurchases(items, occasions, candidates, profile = {}) {
     return { ...present(standalone, null), alternativeTo: rival ? rival.candidate.name : null, similarTo: twin?.name || null, note };
   }).sort((a, b) => b.alone.value - a.alone.value);
   return {
-    coverage: occasions.map((occasion, index) => ({ occasion: occasion.name, outfits: start[index], gaps: completeOutfits(items, occasion.plan, quality).gaps })),
+    coverage: occasions.map((occasion, index) => {
+      const { gaps, notes } = completeOutfits(items, occasion.plan, quality);
+      return { occasion: occasion.name, outfits: start[index], gaps, notes };
+    }),
     results: [...order.map((entry, index) => present(entry, index + 1)), ...covered],
   };
 }

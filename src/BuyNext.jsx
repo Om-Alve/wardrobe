@@ -140,9 +140,9 @@ export function BuyNext({ items }) {
       {review && <>
         <div className="buy-coverage">
           {review.coverage.map((entry) => (
-            <div key={entry.occasion} title={entry.gaps.join(" ")}>
+            <div key={entry.occasion}>
               <strong>{capitalize(entry.occasion)}</strong> {entry.outfits} complete {entry.outfits === 1 ? "outfit" : "outfits"}
-              {entry.gaps.length > 0 && <small>{entry.gaps.join(" ")}</small>}
+              {(entry.notes || entry.gaps).map((note) => <small key={note}>{note}</small>)}
             </div>
           ))}
         </div>

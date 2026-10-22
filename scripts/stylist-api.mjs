@@ -354,7 +354,7 @@ export function stylistApi(options = {}) {
 
         emit("candidates");
         const feedback = deriveFeedback(state, await library());
-        const { looks: pool, gaps, mentioned } = enumerateLooks(available, plan, { anchorId, rejectedSets: feedback.rejectedSets, rejectedPairs: feedback.rejectedPairs });
+        const { looks: pool, gaps, notes: gapNotes, mentioned } = enumerateLooks(available, plan, { anchorId, rejectedSets: feedback.rejectedSets, rejectedPairs: feedback.rejectedPairs });
         if (!pool.length) throw bad(`No combination in this selection fits the request. ${gaps.join(" ")}`.trim(), 422);
         const shortlist = buildShortlist(pool.map((look) => {
           const history = scoreLook(look, feedback);
@@ -380,7 +380,7 @@ export function stylistApi(options = {}) {
         const ideas = picks.map((pick) => validateLook({ name: pick.name, reason: pick.reason, occasion: occasion || "everyday", garmentIds: pick.garmentIds }, available));
         const now = new Date().toISOString();
         const looks = ideas.map((idea) => ({
-          ...idea, plan, gaps, id: randomUUID(), tripId: trip?.id || null, anchorId: anchorId || null, verdict: null,
+          ...idea, plan, gaps, gapNotes, id: randomUUID(), tripId: trip?.id || null, anchorId: anchorId || null, verdict: null,
           selectionIds: selectedIds, status: "idea",
           warnings: warningsFor(idea, trip), weather: weather?.summary || "",
           weatherSource: weather?.source || null, image: null, error: null,

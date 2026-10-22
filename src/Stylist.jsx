@@ -165,7 +165,8 @@ function TripDetails({ trip, items, busy, onSave, onDelete }) {
   );
 }
 
-function LookCard({ look, items, trip, setup, busy, wears, revision, setRevision, onRevise, onPhoto, onSave, onDate, onDelete, onVerdict, onWear, onUnwear, hideHeading = false }) {
+function LookCard({ look, items, trip, setup, busy, wears, revision, setRevision, onRevise, onPhoto, onSave, onDate, onDelete, onVerdict, onWear, onUnwear, hideHeading = false, grouped = false }) {
+  const [revising, setRevising] = useState(false);
   const garments = look.garmentIds.map((id) => items.find((item) => item.id === id)).filter(Boolean);
   const currentWarnings = trip ? garments.filter((item) => trip.items?.[item.id] === "worn").map((item) => `${item.name} is marked worn or in laundry.`) : [];
   const unavailable = trip ? garments.filter((item) => !["packed", "worn"].includes(trip.items?.[item.id])) : [];
@@ -173,7 +174,8 @@ function LookCard({ look, items, trip, setup, busy, wears, revision, setRevision
   const todayDate = new Date().toLocaleDateString("en-CA");
   const wornToday = wears.find((wear) => wear.date === todayDate);
   const lastWear = [...wears].sort((a, b) => b.date.localeCompare(a.date))[0];
-  const photoMissing = !setup.hasImageKey ? "Add an image API key to enable modeled photos." : !setup.hasReference ? "Add a model reference photo to enable modeled photos." : "";
+  const photoReady = setup.hasImageKey && setup.hasReference;
+  const canRevise = ["idea", "failed"].includes(look.status);
   return (
     <article className="stylist-look">
       <div className="stylist-look-main">
@@ -182,16 +184,12 @@ function LookCard({ look, items, trip, setup, busy, wears, revision, setRevision
         )}
         <div className="stylist-look-copy">
           {!hideHeading && <>
-            <div className="stylist-look-topline"><span>{look.status === "generating" ? "Making photo" : look.status === "review" ? "Review photo" : look.savedAt ? "Saved" : "Draft"}</span><span>{look.occasion}</span></div>
+            {(!grouped || look.status !== "idea") && <div className="stylist-look-topline"><span>{look.status === "generating" ? "Making photo" : look.status === "review" ? "Review photo" : look.status === "failed" ? "Photo failed" : look.savedAt ? "Saved" : "Draft"}</span>{!grouped && <span>{look.occasion}</span>}</div>}
             <h3>{look.name}</h3>
           </>}
           <p>{look.reason}</p>
           <div className="stylist-garment-list">{garments.map((item) => <span key={item.id}>{item.name}</span>)}</div>
-          {look.palette && <div className="stylist-palette">
-            <span>Wada #{look.palette.id}</span>
-            {look.palette.colors.map((color) => <span className="stylist-swatch" key={color.name} title={`${color.name} ${color.hex}`} style={{ background: color.hex }} />)}
-          </div>}
-          {look.weather && <p className="stylist-small">Conditions: {look.weather}</p>}
+          {look.weather && !grouped && <p className="stylist-small">Conditions: {look.weather}</p>}
           {lastWear && !wornToday && <p className="stylist-small">Last worn {lastWear.date}</p>}
           {warnings.map((warning) => <p className="stylist-warning" key={warning}>{warning}</p>)}
           {look.error && <p className="stylist-warning">{look.error}</p>}
@@ -200,13 +198,14 @@ function LookCard({ look, items, trip, setup, busy, wears, revision, setRevision
           {look.messages?.length > 0 && <div className="stylist-chat-history">{look.messages.map((entry, index) => <p key={index} className={entry.role}><strong>{entry.role === "user" ? "You" : "Stylist"}</strong> {entry.text}</p>)}</div>}
         </div>
       </div>
-      {["idea", "failed"].includes(look.status) && <form className="stylist-revise-form" onSubmit={(event) => { event.preventDefault(); onRevise(look.id); }}>
-        <input aria-label={`Revise ${look.name}`} value={revision || ""} onChange={(event) => setRevision(look.id, event.target.value)} placeholder="Ask the stylist to change this look…" />
-        <button type="submit" className="stylist-secondary" disabled={busy || !revision?.trim()}>Revise</button>
+      {canRevise && revising && <form className="stylist-revise-form" onSubmit={async (event) => { event.preventDefault(); if (await onRevise(look.id)) setRevising(false); }}>
+        <input autoFocus aria-label={`Revise ${look.name}`} value={revision || ""} onChange={(event) => setRevision(look.id, event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setRevising(false); }} placeholder="Ask the stylist to change this look…" />
+        <button type="submit" className="stylist-primary" disabled={busy || !revision?.trim()}>Revise</button>
       </form>}
       <div className="stylist-look-actions">
-        {["idea", "failed", "review"].includes(look.status) && <button className="stylist-primary" type="button" disabled={busy || unavailable.length > 0 || Boolean(photoMissing)} title={photoMissing || undefined} onClick={() => onPhoto(look.id)}>{look.status === "review" ? "Regenerate photo" : "See how it looks"}</button>}
+        {photoReady && ["idea", "failed", "review"].includes(look.status) && <button className="stylist-primary" type="button" disabled={busy || unavailable.length > 0} onClick={() => onPhoto(look.id)}>{look.status === "review" ? "Regenerate photo" : "See how it looks"}</button>}
         {!look.savedAt && look.status !== "generating" && <button className="stylist-secondary" type="button" disabled={busy || unavailable.length > 0} onClick={() => onSave(look.id)}>Save outfit</button>}
+        {canRevise && !revising && <button className="stylist-secondary" type="button" disabled={busy} onClick={() => setRevising(true)}>Revise</button>}
         {look.savedAt && trip && <label className="stylist-day">Wear on<input type="date" value={look.date || ""} min={trip.startDate || undefined} max={trip.endDate || undefined} disabled={busy} onChange={(event) => onDate(look.id, event.target.value)} /></label>}
         <button className="stylist-secondary" type="button" disabled={busy} aria-pressed={Boolean(wornToday)} onClick={() => wornToday ? onUnwear(wornToday.id) : onWear(look.id)}>{wornToday ? "Worn today" : "Wore it"}</button>
         <span className="stylist-verdict" role="group" aria-label={`Rate ${look.name}`}>
@@ -304,10 +303,20 @@ export function Stylist({ items, view, onNavigate }) {
 
   useEffect(() => { setAnchorId(""); setChosenIds(null); setWeather(null); setConditions(""); }, [scope]);
 
-  const renderLook = (look) => {
+  const draftGroups = useMemo(() => draftLooks.reduce((groups, look) => {
+    if (groups.at(-1)?.createdAt === look.createdAt) groups.at(-1).looks.push(look);
+    else groups.push({ createdAt: look.createdAt, looks: [look] });
+    return groups;
+  }, []), [draftLooks]);
+  const discardDrafts = (group) => {
+    if (!window.confirm(`Discard ${group.looks.length === 1 ? "this draft" : `these ${group.looks.length} drafts`}?`)) return;
+    act(async () => { for (const look of group.looks) await request(`/looks/${look.id}`, "DELETE"); }, "Drafts discarded.");
+  };
+
+  const renderLook = (look, grouped = false) => {
     const lookTrip = state.trips.find((entry) => entry.id === look.tripId) || null;
     const card = <LookCard
-      key={look.id} look={look} items={items} trip={lookTrip} hideHeading={savedView}
+      key={look.id} look={look} items={items} trip={lookTrip} hideHeading={savedView} grouped={grouped}
       setup={state.setup} busy={busy} wears={(state.wears || []).filter((wear) => wear.lookId === look.id)}
       revision={revision[look.id]} setRevision={setRevision}
       onRevise={(id) => act(async () => { await request(`/looks/${id}/revise`, "POST", { message: revision[id] }); setRevision(id, ""); }, "Look revised.")}
@@ -358,7 +367,7 @@ export function Stylist({ items, view, onNavigate }) {
         <section className="stylist-results">
           {loading && <div className="stylist-empty">Loading outfits…</div>}
           {!loading && !error && !savedLooks.length && <div className="stylist-empty">No saved outfits here. Save a draft from the planner to add one.</div>}
-          {savedLooks.map(renderLook)}
+          {savedLooks.map((look) => renderLook(look))}
         </section>
       </div> :
       <div className="stylist-layout">
@@ -417,7 +426,24 @@ export function Stylist({ items, view, onNavigate }) {
           <section className="stylist-results">
             <div className="stylist-section-heading"><h2>Drafts</h2><span className="stylist-item-count">{draftLooks.length} {draftLooks.length === 1 ? "look" : "looks"}</span></div>
             {!draftLooks.length && <div className="stylist-empty">No drafts yet.</div>}
-            {draftLooks.map(renderLook)}
+            {draftGroups.map((group) => {
+              const first = group.looks[0];
+              const notes = [...new Set(group.looks.flatMap((look) => look.gapNotes || []))];
+              const when = new Date(group.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+              return (
+                <section className="stylist-batch" key={group.createdAt}>
+                  <div className="stylist-batch-heading">
+                    <div>
+                      <h3>{first.occasion ? first.occasion.charAt(0).toUpperCase() + first.occasion.slice(1) : "Outfit ideas"}</h3>
+                      <small>{[first.weather, when].filter(Boolean).join(" · ")}</small>
+                    </div>
+                    <button type="button" className="stylist-text-button" disabled={busy} onClick={() => discardDrafts(group)}>Discard</button>
+                  </div>
+                  {notes.map((note) => <p className="stylist-gap" key={note}>{note}</p>)}
+                  {group.looks.map((look) => renderLook(look, true))}
+                </section>
+              );
+            })}
           </section>
           <p className="stylist-credit">Color references: <a href="https://github.com/mattdesl/dictionary-of-colour-combinations" target="_blank" rel="noreferrer">Sanzo Wada dictionary dataset</a>. Forecast: <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a>.</p>
         </div>

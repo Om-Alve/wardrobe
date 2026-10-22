@@ -85,6 +85,16 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
   const names = (list) => list.map((item) => `"${item.name}"`).join(", ");
   const limits = (maxWarmth, [lowest, highest] = plan.formality) => `formality ${lowest}-${highest}${maxWarmth === null ? "" : ` and warmth up to ${maxWarmth}`}`;
   const gaps = [];
+  // The same gaps in plain words for the page; the model gets the exact ranges above.
+  const notes = [];
+  const shortfall = (list, maxWarmth, [lowest, highest] = plan.formality) => {
+    const levels = list.map((item) => attributes.get(item.id));
+    if (levels.length && levels.every(({ formality }) => formality !== undefined && formality < lowest)) return "dressy enough";
+    if (levels.length && levels.every(({ formality }) => formality !== undefined && formality > highest)) return "casual enough";
+    if (maxWarmth !== null && levels.length && levels.every(({ warmth: level }) => level !== undefined && level > maxWarmth)) return "light enough for the weather";
+    return "right for this";
+  };
+  const owned = (list) => list.length > 2 ? `"${list[0].name}" and ${list.length - 1} more` : list.map((item) => `"${item.name}"`).join(" and ");
   // Pieces a reason may name without wearing them: ones the request ruled out and ones a gap points to.
   const mentioned = items.filter((item) => excluded.has(item.id));
   // Slots filled with the closest pieces because nothing fit; looks built on them are stand-ins, not complete outfits.
@@ -106,6 +116,7 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
     assign(closest);
     relaxed.add(label);
     gaps.push(`No ${label} fit ${limits(plan.maxWarmth)}; the closest ${closest.length === 1 ? "is" : "are"} ${names(closest)}.`);
+    notes.push(`No ${label} ${shortfall(pool, plan.maxWarmth)}, so these looks use the closest.`);
   }
 
   const layerChoice = choose("wholebody_up", plan.layerMaxWarmth);
@@ -117,6 +128,9 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
     layers = [null, ...layerChoice.fitting];
     if (plan.outerLayer === "needed") {
       gaps.push(`The conditions call for an outer layer, but none fits ${limits(plan.layerMaxWarmth)}${layerChoice.pool.length ? `; the wardrobe has ${names(layerChoice.pool)}` : ""}.`);
+      notes.push(layerChoice.pool.length
+        ? `No outer layer ${shortfall(layerChoice.pool, plan.layerMaxWarmth)}; you have ${owned(layerChoice.pool)}.`
+        : "No outer layer, and this calls for one.");
       mentioned.push(...layerChoice.pool);
     }
   }
@@ -127,6 +141,7 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
     shoes = [null];
     if (shoeChoice.pool?.length) {
       gaps.push(`No shoes fit ${limits(plan.maxWarmth, plan.shoeFormality)}, so looks leave shoes out; the wardrobe has ${names(shoeChoice.pool)}.`);
+      notes.push(`No shoes ${shortfall(shoeChoice.pool, plan.maxWarmth, plan.shoeFormality)}; you have ${owned(shoeChoice.pool)}.`);
       mentioned.push(...shoeChoice.pool);
     }
   }
@@ -142,7 +157,7 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
       looks.push({ ids, pieces });
     }
   }
-  return { looks, gaps, mentioned, relaxed };
+  return { looks, gaps, notes, mentioned, relaxed };
 }
 
 export function deltaE2000([L1, a1, b1], [L2, a2, b2]) {

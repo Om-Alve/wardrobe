@@ -248,9 +248,12 @@
 .stylist-look-copy > p { margin: 0 0 12px; color: #4e4b47; font-size: 13px; line-height: 1.5; }
 .stylist-garment-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .stylist-garment-list span { border: 1px solid var(--line); padding: 6px 8px; color: var(--ink); font-size: 11px; }
-.stylist-palette { display: flex; align-items: center; gap: 5px; margin-top: 15px; color: var(--muted); font-size: 11px; }
-.stylist-palette > span:first-child { margin-right: 6px; }
-.stylist-swatch { display: inline-block; width: 19px; height: 19px; border: 1px solid rgba(0,0,0,.12); }
+.stylist-batch { display: flex; flex-direction: column; gap: 12px; }
+.stylist-batch + .stylist-batch { margin-top: 18px; }
+.stylist-batch-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding-bottom: 2px; }
+.stylist-batch-heading h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.02em; }
+.stylist-batch-heading small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+.stylist-gap { margin: 0; border-left: 2px solid var(--line); padding: 2px 0 2px 10px; color: #4e4b47; font-size: 12px; line-height: 1.5; }
 .stylist-look-copy .stylist-warning { margin: 8px 0 0; color: #8d4537; font-size: 12px; }
 .stylist-chat-history { margin-top: 15px; padding-top: 10px; border-top: 1px solid var(--line); }
 .stylist-chat-history p { margin: 6px 0; color: var(--muted); font-size: 12px; }
@@ -307,7 +310,9 @@
   .stylist-pack-row img { width: 42px; height: 45px; }
   .stylist-pack-row select { grid-column: 2; }
   .stylist-look-main { display: flex; flex-direction: column; }
-  .stylist-look-photo, .stylist-look-collage { height: 275px; }
+  .stylist-look-photo { height: 275px; }
+  .stylist-look-collage { height: auto; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); padding: 14px; }
+  .stylist-look-collage img { height: 92px; }
   .stylist-revise-form { flex-direction: column; }
   .stylist-weather-row { flex-direction: column; align-items: flex-start; }
   .stylist-picker-list { grid-template-columns: 1fr; }
