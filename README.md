@@ -65,6 +65,8 @@ If you are setting up Wardrobe for a user, ask how they want to import their clo
 - Keeps originals, jobs, generated images, and the JSON database local in `data/`
 - Supports drag, drop, paste, editing, review, regeneration, and approval
 
+Garment cutouts use a 1024 × 1024 transparent canvas. To reframe older local imports, preview with `npm run normalize:garments`, then run `npm run normalize:garments:apply`. The command saves the original PNGs in `data/original-garments/` before replacing them.
+
 ## Configuration
 
 | Variable | Default |

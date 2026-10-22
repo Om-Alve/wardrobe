@@ -9,6 +9,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "normalize:garments": "node scripts/normalize-library-images.mjs",
+    "normalize:garments:apply": "node scripts/normalize-library-images.mjs --apply",
     "check": "npm run build && npm run test:stylist && npm run test:import-llm",
     "test:stylist": "node scripts/verify-stylist.mjs",
     "test:import-llm": "node scripts/verify-import-llm.mjs"

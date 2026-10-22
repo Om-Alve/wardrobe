@@ -166,12 +166,15 @@ function GalleryItem({ item, selected, onOpen }) {
       aria-pressed={selected}
       data-testid={`wardrobe-item-${item.id}`}
     >
-      <OptimizedImage
-        src={item.thumbnail || item.image}
-        alt=""
-        sizes="(max-width: 520px) calc(50vw - 16px), (max-width: 860px) calc(33vw - 18px), 180px"
-        breakpoints={[120, 180, 240, 320, 480]}
-      />
+      <span className="gallery-item-media">
+        <OptimizedImage
+          src={item.thumbnail || item.image}
+          alt=""
+          sizes="(max-width: 520px) calc(50vw - 24px), (max-width: 860px) calc(33vw - 24px), 220px"
+          breakpoints={[120, 180, 240, 320, 480]}
+        />
+      </span>
+      <span className="gallery-item-copy"><span className="gallery-item-name">{item.name || type}</span><span className="gallery-item-type">{type}</span></span>
     </button>
   );
 }
@@ -476,23 +479,25 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
       </button>
 
       {hasModeledImage ? (
-        <div className="modeled-hero">
-          <OptimizedImage
-            className="modeled-hero-photo"
-            src={item.modeledImage}
-            alt={`${draft.name || type} worn by a model`}
-            sizes="(max-width: 860px) 100vw, 520px"
-            breakpoints={[320, 480, 640, 800, 1040, 1280]}
-            quality={82}
-            priority
-          />
+        <>
           <div className="viewer-heading modeled-heading">
             <div>
               <h2>{draft.name || TYPE_MAP[draft.part]?.singular}</h2>
             </div>
           </div>
-          {garmentArtwork}
-        </div>
+          <div className="modeled-hero">
+            <OptimizedImage
+              className="modeled-hero-photo"
+              src={item.modeledImage}
+              alt={`${draft.name || type} worn by a model`}
+              sizes="(max-width: 860px) 100vw, 520px"
+              breakpoints={[320, 480, 640, 800, 1040, 1280]}
+              quality={82}
+              priority
+            />
+            {garmentArtwork}
+          </div>
+        </>
       ) : (
         <>
           <div className="viewer-heading">
@@ -610,15 +615,16 @@ export function App() {
       <div className="app-topbar">
         <span className="app-brand">Wardrobe</span>
         <nav aria-label="Main navigation">
-          <button type="button" className={view === "wardrobe" ? "active" : ""} onClick={() => { setView("wardrobe"); setSelectedId(null); }}>My wardrobe</button>
-          <button type="button" className={view === "stylist" ? "active" : ""} onClick={() => { setView("stylist"); setSelectedId(null); }}>Trips & outfits</button>
+          <button type="button" className={view === "wardrobe" ? "active" : ""} onClick={() => { setView("wardrobe"); setSelectedId(null); }}>Clothes</button>
+          <button type="button" className={view === "stylist" ? "active" : ""} onClick={() => { setView("stylist"); setSelectedId(null); }}>Outfits</button>
         </nav>
       </div>
       {view === "wardrobe" ? <>
       <main className="gallery-pane">
         <header className="gallery-header">
           <div className="gallery-meta-row">
-            <p className="piece-count">{items.length} {items.length === 1 ? "piece" : "pieces"}</p>
+            <h1 className="gallery-title">My wardrobe</h1>
+            <p className="piece-count">{items.length} {items.length === 1 ? "item" : "items"}</p>
           </div>
           <nav className="category-nav" aria-label="Filter wardrobe by item type">
             {TYPES.map((type) => (

@@ -123,9 +123,9 @@ Input image: The reference photograph shows the exact garment, either by itself 
 
 Primary request: Reconstruct ONLY the complete empty ${name} (${category}) as a clean, front-facing ecommerce catalog product photograph. If a wearer is present, remove them. Remove every other garment, object, and background element. Show the complete item naturally arranged and symmetrical, with no person, body, mannequin, or hanger visible.
 
-Garment fidelity: Preserve the reference garment's exact primary color ${primary}${secondary}, material and texture, silhouette, neckline, sleeves, fastenings, pattern, and distinctive details (${details}). Preserve any clearly legible existing graphic or logo exactly, but do not invent or reinterpret uncertain logos, text, pockets, seams, hardware, colors, or decoration.
+Garment fidelity: Preserve the reference garment's exact primary color ${primary}${secondary}, material and texture, silhouette, neckline, sleeves, fastenings, pattern, and distinctive details (${details}). Keep the original length and proportions: do not shorten a shirt into a cropped top or omit trouser hems. Preserve any clearly legible existing graphic or logo exactly, but do not invent or reinterpret uncertain logos, text, pockets, seams, hardware, colors, or decoration.
 
-Composition: Centered straight-on product view. Keep the entire garment inside the frame with generous, even padding on every side. No cropping or truncation.
+Composition: Exactly 1024 x 1024 pixels, square. Center the garment in a straight-on product view. Its longest visible dimension should fill about 88% of the canvas (about 900 pixels), leaving at least 6% clear margin on each side of that dimension. Use the same scale rule for tops, trousers, and layers. Keep the whole item in frame, including cuffs and hems, with no cropping or truncation.
 
 Background: Perfectly flat, absolutely uniform solid ${chromaKey} chroma-key color, edge-to-edge. No shadows, gradient, texture, vignette, floor, horizon, reflection, or lighting variation.
 
@@ -233,7 +233,7 @@ export async function frameTransparentGarment(bytes, canvasSize = 1024, occupanc
   let maxX = -1;
   let maxY = -1;
   for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
-    if (data[index + 3] <= 8) continue;
+    if (data[index + 3] <= 16) continue;
     const x = pixel % info.width;
     const y = Math.floor(pixel / info.width);
     minX = Math.min(minX, x);
@@ -504,7 +504,7 @@ export function wardrobeImportApi(options = {}) {
         const file = path.join(libraryAssetDir, path.basename(libraryAssetMatch[1]));
         await stat(file);
         res.setHeader("Content-Type", "image/png");
-        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        res.setHeader("Cache-Control", "no-store");
         return res.end(await readFile(file));
       }
       const assetMatch = url.pathname.match(/^\/api\/import\/assets\/([a-f0-9-]{36})\/([\w.-]+)$/i);

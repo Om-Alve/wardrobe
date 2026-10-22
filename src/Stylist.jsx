@@ -56,7 +56,6 @@ function TripDetails({ trip, items, busy, onSave, onDelete }) {
     setDetails({ name: trip.name, destination: trip.destination, startDate: trip.startDate, endDate: trip.endDate });
     setSearch("");
   }, [trip.id]);
-  const selected = Object.keys(trip.items || {});
   const sorted = [...items].sort((a, b) => PART_ORDER.indexOf(a.part) - PART_ORDER.indexOf(b.part) || a.name.localeCompare(b.name));
   const visible = sorted.filter((item) => item.name.toLowerCase().includes(search.toLowerCase()) || item.tags?.some((tag) => tag.includes(search.toLowerCase())));
   const count = (status) => Object.values(trip.items || {}).filter((value) => value === status).length;
@@ -69,10 +68,10 @@ function TripDetails({ trip, items, busy, onSave, onDelete }) {
   return (
     <section className="stylist-panel stylist-packing">
       <div className="stylist-section-heading">
-        <div><span className="stylist-kicker">Packing list</span><h2>{trip.name}</h2></div>
+        <h2>{trip.name}</h2>
         <button className="stylist-text-button danger" type="button" disabled={busy} onClick={onDelete}>Delete trip</button>
       </div>
-      <form className="stylist-details-form" onSubmit={(event) => { event.preventDefault(); onSave(details); }}>
+      <details className="stylist-trip-settings"><summary>Trip details</summary><form className="stylist-details-form" onSubmit={(event) => { event.preventDefault(); onSave(details); }}>
         <label>Trip name<input value={details.name} onChange={(event) => setDetails({ ...details, name: event.target.value })} /></label>
         <label>Destination<input value={details.destination} onChange={(event) => setDetails({ ...details, destination: event.target.value })} placeholder="City, country" /></label>
         <div className="stylist-two-fields">
@@ -80,11 +79,11 @@ function TripDetails({ trip, items, busy, onSave, onDelete }) {
           <label>To<input type="date" value={details.endDate} onChange={(event) => setDetails({ ...details, endDate: event.target.value })} /></label>
         </div>
         <button type="submit" className="stylist-secondary" disabled={busy || !details.name.trim()}>Save trip details</button>
-      </form>
+      </form></details>
       <div className="stylist-pack-summary">
         <span>{count("planned")} planned</span><span>{count("packed")} packed</span><span>{count("worn")} worn or laundry</span>
       </div>
-      <p className="stylist-note">The agent uses packed and worn items. It warns when a look uses something marked worn or in laundry.</p>
+      <p className="stylist-note">Outfits use packed items. Worn items are included with a warning.</p>
       <label className="stylist-search">Find a wardrobe item<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search clothes and accessories" /></label>
       <div className="stylist-pack-list">
         {visible.map((item) => (
@@ -105,7 +104,7 @@ function TripDetails({ trip, items, busy, onSave, onDelete }) {
           </div>
         ))}
       </div>
-      <p className="stylist-note">{selected.length} {selected.length === 1 ? "item" : "items"} on this trip.</p>
+      {!visible.length && <p className="stylist-note">No matching items.</p>}
     </section>
   );
 }
@@ -115,7 +114,7 @@ function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRev
   const currentWarnings = trip ? garments.filter((item) => trip.items?.[item.id] === "worn").map((item) => `${item.name} is marked worn or in laundry.`) : [];
   const unavailable = trip ? garments.filter((item) => !["packed", "worn"].includes(trip.items?.[item.id])) : [];
   const warnings = [...new Set([...currentWarnings, ...unavailable.map((item) => `${item.name} is no longer packed.`)])];
-  const photoMissing = !setup.hasImageKey ? "Add OPENAI_IMAGE_API_KEY to enable modeled photos." : !setup.hasReference ? "Add a model reference photo to enable modeled photos." : "";
+  const photoMissing = !setup.hasImageKey ? "Add an image API key to enable modeled photos." : !setup.hasReference ? "Add a model reference photo to enable modeled photos." : "";
   return (
     <article className="stylist-look">
       <div className="stylist-look-main">
@@ -123,7 +122,7 @@ function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRev
           <div className="stylist-look-collage">{garments.map((item) => <ItemThumb key={item.id} item={item} />)}</div>
         )}
         <div className="stylist-look-copy">
-          <div className="stylist-look-topline"><span className="stylist-kicker">{look.status === "generating" ? "Making photo" : look.status === "review" ? "Review photo" : look.savedAt ? "Saved outfit" : "Draft idea"}</span><span>{look.occasion}</span></div>
+          <div className="stylist-look-topline"><span>{look.status === "generating" ? "Making photo" : look.status === "review" ? "Review photo" : look.savedAt ? "Saved" : "Draft"}</span><span>{look.occasion}</span></div>
           <h3>{look.name}</h3>
           <p>{look.reason}</p>
           <div className="stylist-garment-list">{garments.map((item) => <span key={item.id}>{item.name}</span>)}</div>
@@ -144,7 +143,7 @@ function LookCard({ look, items, trip, setup, busy, revision, setRevision, onRev
         <button type="submit" className="stylist-secondary" disabled={busy || !revision?.trim()}>Revise</button>
       </form>}
       <div className="stylist-look-actions">
-        {["idea", "failed", "review"].includes(look.status) && <><button className="stylist-primary" type="button" disabled={busy || unavailable.length > 0 || Boolean(photoMissing)} title={photoMissing || undefined} onClick={() => onPhoto(look.id)}>{look.status === "review" ? "Regenerate photo" : "See how it looks"}</button>{photoMissing && <span className="stylist-small">{photoMissing}</span>}</>}
+        {["idea", "failed", "review"].includes(look.status) && <button className="stylist-primary" type="button" disabled={busy || unavailable.length > 0 || Boolean(photoMissing)} title={photoMissing || undefined} onClick={() => onPhoto(look.id)}>{look.status === "review" ? "Regenerate photo" : "See how it looks"}</button>}
         {!look.savedAt && look.status !== "generating" && <button className="stylist-secondary" type="button" disabled={busy || unavailable.length > 0} onClick={() => onSave(look.id)}>Save outfit</button>}
         {look.savedAt && trip && <label className="stylist-day">Wear on<input type="date" value={look.date || ""} min={trip.startDate || undefined} max={trip.endDate || undefined} disabled={busy} onChange={(event) => onDate(look.id, event.target.value)} /></label>}
         <button className="stylist-text-button danger" type="button" disabled={busy} onClick={() => onDelete(look.id)}>Delete look</button>
@@ -214,10 +213,7 @@ export function Stylist({ items }) {
 
   return (
     <main className="stylist-page">
-      <header className="stylist-hero">
-        <div><p className="stylist-kicker">Wardrobe / Outfit studio</p><h1>Wear what you own.</h1><p>Pack a trip, ask for ideas, then create a modeled photo when a look feels right.</p></div>
-        <div className="stylist-hero-mark">W<span>348 color combinations</span></div>
-      </header>
+      <header className="stylist-hero"><h1>Trips & outfits</h1><p>Build looks from your wardrobe or a trip packing list.</p></header>
       {!state.setup.hasLlm && <p className="stylist-alert">Set <code>WARDROBE_LLM_API_KEY</code> or <code>WARDROBE_LLM_BASE_URL</code> in <code>.env</code> and restart the app to ask for outfits.</p>}
       {!state.setup.hasImageKey && <p className="stylist-alert">Add <code>OPENAI_IMAGE_API_KEY</code> to <code>.env</code> to create modeled photos.</p>}
       {!state.setup.hasReference && <p className="stylist-alert">Add <code>data/model-reference.png</code> to create modeled photos.</p>}
@@ -227,23 +223,20 @@ export function Stylist({ items }) {
       <div className="stylist-layout">
         <aside className="stylist-sidebar">
           <section className="stylist-panel">
-            <div className="stylist-section-heading"><div><span className="stylist-kicker">Your lists</span><h2>Trips</h2></div></div>
+            <div className="stylist-section-heading"><h2>Lists</h2></div>
             <div className="stylist-trip-nav">
               <button type="button" className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>Whole wardrobe <span>{items.length}</span></button>
               {state.trips.map((entry) => <button type="button" className={scope === entry.id ? "active" : ""} key={entry.id} onClick={() => setScope(entry.id)}>{entry.name} <span>{Object.keys(entry.items || {}).length}</span></button>)}
             </div>
           </section>
-          <section className="stylist-panel">
-            <div className="stylist-section-heading"><div><span className="stylist-kicker">Add a list</span><h2>New trip</h2></div></div>
-            <TripForm onCreate={createTrip} busy={busy} />
-          </section>
+          <details className="stylist-panel stylist-new-trip" key={state.trips.length}><summary>New trip</summary><TripForm onCreate={createTrip} busy={busy} /></details>
         </aside>
 
         <div className="stylist-content">
           {trip && <TripDetails key={trip.id} trip={trip} items={items} busy={busy} onSave={(changes) => act(() => request(`/trips/${trip.id}`, "PATCH", changes))} onDelete={deleteTrip} />}
           <section className="stylist-panel stylist-ask">
-            <div className="stylist-section-heading"><div><span className="stylist-kicker">AI stylist</span><h2>{trip ? `Ideas for ${trip.name}` : "Ideas from your wardrobe"}</h2></div><span className="stylist-item-count">{requestItems.length} selected items</span></div>
-            <p className="stylist-note">{trip ? "Only packed and worn items are available. Planned items stay out of suggestions." : "Ask for looks from every item in your wardrobe."} Sanzo Wada palettes guide the colors, with room for useful neutrals.</p>
+            <div className="stylist-section-heading"><h2>Outfit ideas</h2><span className="stylist-item-count">{requestItems.length} items available</span></div>
+            {trip && <p className="stylist-note">Only packed and worn items are available.</p>}
             <form className="stylist-ask-form" onSubmit={async (event) => {
               event.preventDefault();
               if (await act(() => request("/suggest", "POST", { tripId: trip?.id || null, selectedItemIds: requestItems.map((item) => item.id), count: Number(count), occasion, conditions, brief, anchorId: requestItems.some((item) => item.id === anchorId) ? anchorId : "" }), "Draft looks saved. Revise one or make its photo.")) setLookFilter("drafts");
@@ -264,13 +257,13 @@ export function Stylist({ items }) {
               {trip?.destination && <div className="stylist-weather-row"><button type="button" className="stylist-secondary" disabled={busy} onClick={lookupWeather}>Check destination weather</button>{weather && <span>{weather.unavailable ? "Forecast is outside the available range. Enter conditions below." : weather.summary}</span>}</div>}
               <label>Weather or conditions override<input value={conditions} onChange={(event) => setConditions(event.target.value)} placeholder="Warm days, cool evenings, possible rain…" /></label>
               <label>What would you like to wear?<textarea value={brief} onChange={(event) => setBrief(event.target.value)} rows={3} placeholder="I want relaxed looks that work for walking all day and one nicer dinner." /></label>
-              <div className="stylist-submit-row"><button className="stylist-primary" disabled={busy || !state.setup.hasLlm || !requestItems.some((item) => item.part === "upperbody") || !requestItems.some((item) => item.part === "lowerbody")}>Ask for outfit ideas</button><span>Suggestions are saved as drafts. Photos are made only when you click “See how it looks.”</span></div>
+              <div className="stylist-submit-row"><button className="stylist-primary" disabled={busy || !state.setup.hasLlm || !requestItems.some((item) => item.part === "upperbody") || !requestItems.some((item) => item.part === "lowerbody")}>Suggest outfits</button></div>
             </form>
           </section>
           <section className="stylist-results">
-            <div className="stylist-section-heading"><div><span className="stylist-kicker">Ideas and saved outfits</span><h2>{trip ? trip.name : "Whole wardrobe"}</h2></div><span className="stylist-item-count">{looks.length} looks</span></div>
+            <div className="stylist-section-heading"><h2>Outfits</h2><span className="stylist-item-count">{looks.length} {looks.length === 1 ? "look" : "looks"}</span></div>
             <div className="stylist-look-filters" aria-label="Filter looks">{[["all", "All"], ["drafts", "Drafts"], ["saved", "Saved"]].map(([value, label]) => <button type="button" key={value} className={lookFilter === value ? "active" : ""} onClick={() => setLookFilter(value)}>{label}</button>)}</div>
-            {!shownLooks.length && <div className="stylist-empty">{looks.length ? "No looks in this view yet." : "Your outfit ideas will appear here. Pick an anchor piece or describe what you need."}</div>}
+            {!shownLooks.length && <div className="stylist-empty">{looks.length ? "No outfits in this view." : "Choose some items and suggest your first outfit."}</div>}
             {shownLooks.map((look) => <LookCard
               key={look.id} look={look} items={items} trip={trip} setup={state.setup} busy={busy}
               revision={revision[look.id]} setRevision={setRevision}

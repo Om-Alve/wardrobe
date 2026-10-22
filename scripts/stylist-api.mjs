@@ -160,7 +160,7 @@ export function stylistApi(options = {}) {
       const images = [{ name: "person.png", data: await readFile(reference) }];
       for (const item of garments) {
         if (!item.image?.startsWith("/api/import/library/")) throw bad(`No local image for ${item.name}.`);
-        images.push({ name: `${item.part}.png`, data: await readFile(path.join(root, setting("WARDROBE_DATA_DIR", "data"), "imported", path.basename(item.image))) });
+        images.push({ name: `${item.part}.png`, data: await readFile(path.join(root, setting("WARDROBE_DATA_DIR", "data"), "imported", path.basename(new URL(item.image, "http://localhost").pathname))) });
       }
       const list = garments.map((item) => `${item.part}: ${item.name} (${item.color}; ${item.tags?.join(", ") || "no tags"})`).join("\n");
       const prompt = `Create one photorealistic full-length modeled outfit photograph of the person in the FIRST reference image. Every later reference is an exact wardrobe item to put on the person. Preserve identity, face, build, skin tone, and hair. Use ALL and ONLY these selected pieces, keeping exact color, fabric, cut, pattern, logos, closures, and proportions:\n${list}\nOutfit: ${look.name}. Occasion: ${look.occasion || "everyday"}. ${look.reason}\nMake the top and bottom clearly visible. Layer garments naturally. If no shoes were selected, crop above the feet rather than inventing footwear. Do not add extra garments, accessories, people, words, or watermarks. Natural editorial photograph, anatomically plausible, plain unobtrusive background.`;
