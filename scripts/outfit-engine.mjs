@@ -8,6 +8,8 @@ const PREFIX = { upperbody: "T", lowerbody: "B", wholebody_up: "O", shoes: "S", 
 const PART_ORDER = Object.keys(PREFIX);
 const LAYER_PLANS = new Set(["needed", "optional", "skip"]);
 const SHORTLIST_SIZE = 20;
+// Above this many combinations, shoe and layer options are trimmed to those closest to the plan.
+const MAX_LOOKS = 20000;
 
 export function assignHandles(items) {
   const handleOf = new Map();
@@ -101,6 +103,9 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
   const relaxed = new Set();
   const choose = (part, maxWarmth) => {
     const pool = items.filter((item) => item.part === part && !excluded.has(item.id));
+    // The anchor alone holds its slot; pieces the plan asks for share a slot only with each other.
+    const anchored = pool.filter((item) => item.id === anchorId);
+    if (anchored.length) return { fitting: anchored, any: true };
     const pinned = pool.filter((item) => required.has(item.id));
     if (pinned.length) return { fitting: pinned, any: true };
     const fitting = pool.filter((item) => miss(item, maxWarmth) === 0);
@@ -116,7 +121,7 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
     assign(closest);
     relaxed.add(label);
     gaps.push(`No ${label} fit ${limits(plan.maxWarmth)}; the closest ${closest.length === 1 ? "is" : "are"} ${names(closest)}.`);
-    notes.push(`No ${label} ${shortfall(pool, plan.maxWarmth)}, so these looks use the closest.`);
+    notes.push(`No ${label} ${shortfall(pool, plan.maxWarmth)}; the closest you have ${closest.length === 1 ? "is" : "are"} ${owned(closest)}.`);
   }
 
   const layerChoice = choose("wholebody_up", plan.layerMaxWarmth);
@@ -144,6 +149,15 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
       notes.push(`No shoes ${shortfall(shoeChoice.pool, plan.maxWarmth, plan.shoeFormality)}; you have ${owned(shoeChoice.pool)}.`);
       mentioned.push(...shoeChoice.pool);
     }
+  }
+
+  if (tops.length * bottoms.length * layers.length * shoes.length > MAX_LOOKS) {
+    const nearest = (list, [lowest, highest]) => [...list].sort((a, b) => {
+      const distance = (item) => Math.abs((attributes.get(item.id).formality ?? (lowest + highest) / 2) - (lowest + highest) / 2);
+      return distance(a) - distance(b) || a.id.localeCompare(b.id);
+    });
+    shoes = shoes[0] === null ? shoes : nearest(shoes, plan.shoeFormality).slice(0, 5);
+    layers = [...layers.filter((layer) => layer === null), ...nearest(layers.filter(Boolean), plan.formality).slice(0, 3)];
   }
 
   // Pinned pieces already limit their slot above, so every look includes one of them.
@@ -239,10 +253,12 @@ function similarity(first, second) {
 // Maximal marginal relevance: each pick balances its own score against overlap with looks already chosen.
 export function mmrSelect(scored, size, { lambda = 0.7, perPair = 2 } = {}) {
   if (!scored.length) return [];
-  const scores = scored.map((entry) => entry.score);
-  const low = Math.min(...scores);
-  const span = Math.max(...scores) - low || 1;
-  const remaining = [...scored];
+  // Only the best few hundred can win a place in a short list, so diversity is weighed among those.
+  const remaining = [...scored].sort((a, b) => b.score - a.score).slice(0, 600);
+  let low = Infinity;
+  let high = -Infinity;
+  for (const entry of remaining) { low = Math.min(low, entry.score); high = Math.max(high, entry.score); }
+  const span = high - low || 1;
   const chosen = [];
   const pairCount = new Map();
   while (chosen.length < size && remaining.length) {
@@ -311,14 +327,15 @@ export function validatePicks(raw, shortlist, accessories, count, { required = [
 }
 
 // Color words a reason may use, grouped into families so "grey-blue" or "deep red" for burgundy still count as true.
+// Words that also name fabrics, drinks, or metals (denim, wine, stone, gold) are left out.
 const COLOR_FAMILIES = {
   black: ["black"], white: ["white"], "off-white": ["white"], ivory: ["white"], cream: ["white", "tan"], ecru: ["white", "tan"],
   grey: ["grey"], gray: ["grey"], charcoal: ["grey", "black"], silver: ["grey"], slate: ["blue", "grey"],
-  navy: ["blue"], blue: ["blue"], denim: ["blue"], indigo: ["blue"], teal: ["blue", "green"],
+  navy: ["blue"], blue: ["blue"], indigo: ["blue"], teal: ["blue", "green"],
   green: ["green"], olive: ["green", "tan"], sage: ["green"], mint: ["green"], khaki: ["tan", "green"],
-  tan: ["tan"], beige: ["tan"], stone: ["tan", "grey"], camel: ["tan", "brown"], brown: ["brown"], chocolate: ["brown"],
-  burgundy: ["red"], wine: ["red"], maroon: ["red"], red: ["red"], rust: ["orange", "red"], terracotta: ["orange"], orange: ["orange"],
-  mustard: ["yellow"], yellow: ["yellow"], gold: ["yellow"], pink: ["pink"], coral: ["pink", "orange"],
+  tan: ["tan"], beige: ["tan"], camel: ["tan", "brown"], brown: ["brown"], chocolate: ["brown"],
+  burgundy: ["red"], maroon: ["red"], red: ["red"], rust: ["orange", "red"], terracotta: ["orange"], orange: ["orange"],
+  mustard: ["yellow"], yellow: ["yellow"], pink: ["pink"], coral: ["pink", "orange"],
   purple: ["purple"], plum: ["purple", "red"], lavender: ["purple"],
 };
 const COLOR_WORD = new RegExp(`\\b(${Object.keys(COLOR_FAMILIES).sort((a, b) => b.length - a.length).join("|")})\\b`, "gi");

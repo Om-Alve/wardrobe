@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Plus, X } from "@phosphor-icons/react";
+import { DEFAULT_OCCASIONS } from "../scripts/buy-next.mjs";
 import { PART_LABELS } from "../scripts/garment-attributes.mjs";
 import "./stylist.css";
 import "./buy-next.css";
@@ -21,8 +22,9 @@ const capitalize = (value) => value.charAt(0).toUpperCase() + value.slice(1);
 
 function Purchase({ result, pieces }) {
   const changes = result.breakdown.filter((entry) => entry.after > entry.before);
+  const together = result.together?.length ? ` together with ${result.together.join(" and ")}` : "";
   const summary = result.step
-    ? `Adds ${outfits(result.added)}${result.step > 1 ? " with the pieces above" : ""}`
+    ? `Adds ${outfits(result.added)}${together}${result.step > 1 ? `${together ? "," : ""} on top of the pieces above` : ""}`
     : result.similarTo ? `Similar to ${result.similarTo}, which you own`
       : result.alternativeTo ? `Alternative to ${result.alternativeTo}` : "Adds no new outfits for these occasions";
   return (
@@ -71,7 +73,7 @@ export function BuyNext({ items }) {
     request().then((result) => {
       setOccasions(result.last?.occasions.map((occasion) => occasion.name) || result.occasions);
       setReview(result.last);
-    }).catch((failure) => setError(failure.message));
+    }).catch((failure) => { setError(failure.message); setOccasions(DEFAULT_OCCASIONS); });
   }, []);
   useEffect(() => {
     if (!busy) return undefined;

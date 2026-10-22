@@ -602,17 +602,18 @@ export function App() {
         const edits = readEdits();
         const deleted = readDeletedItems();
         const visibleItems = loadedItems.filter((item) => !deleted.has(item.id));
-        // Older versions kept edits in this browser only; move them to the library so the stylist sees them.
-        setItems(await Promise.all(visibleItems.map(async (item) => {
-          if (!edits[item.id]) return item;
+        // Older versions kept edits in this browser only; move them to the library, one at a time, so the stylist sees them.
+        const migrated = [];
+        for (const item of visibleItems) {
+          if (!edits[item.id]) { migrated.push(item); continue; }
           try {
-            const saved = await saveRemoteItem({ ...item, ...edits[item.id], attributes: undefined });
+            migrated.push(await saveRemoteItem({ ...item, ...edits[item.id], attributes: undefined }));
             removePersistedEdit(item.id);
-            return saved;
           } catch {
-            return { ...item, ...edits[item.id] };
+            migrated.push({ ...item, ...edits[item.id] });
           }
-        })));
+        }
+        setItems(migrated);
       })
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));

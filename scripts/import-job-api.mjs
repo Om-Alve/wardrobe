@@ -380,6 +380,19 @@ export function wardrobeImportApi(options = {}) {
     catch (error) { if (error.code === "ENOENT") return []; throw error; }
   }
 
+  // Every read-modify-write of library.json goes through one queue, so concurrent edits, deletes, and approvals cannot overwrite each other.
+  let libraryQueue = Promise.resolve();
+  function changeLibrary(change) {
+    const task = libraryQueue.then(async () => {
+      const records = await loadImported();
+      const { next, result } = await change(records);
+      if (next) await atomicJson(importedFile, next);
+      return result;
+    });
+    libraryQueue = task.catch(() => {});
+    return task;
+  }
+
   async function persistImported(job, includeModeled = false) {
     const id = `import-${job.id}`;
     await mkdir(libraryAssetDir, { recursive: true });
@@ -398,34 +411,53 @@ export function wardrobeImportApi(options = {}) {
       modeledImage = `${LIBRARY_ASSET_ROOT}/${modeledName}`;
     }
     const metadata = job.metadata || {};
-    const records = await loadImported();
-    const existing = records.find((record) => record.id === id);
-    // Once an item is in the library, its library record owns the description, including later edits.
-    const described = existing ? {
-      name: existing.name, part: existing.part, color: existing.color, secondaryColor: existing.secondaryColor,
-      palette: existing.palette, tags: existing.tags,
-    } : {
-      name: metadata.name || "New piece",
-      part: metadata.part || "upperbody",
-      color: metadata.color || "#d8d0c2",
-      secondaryColor: metadata.secondaryColor || null,
-      palette: [metadata.color, metadata.secondaryColor].filter(Boolean),
-      tags: Array.isArray(metadata.tags) ? metadata.tags : [],
-    };
-    const attributes = Object.keys(existing?.attributes || {}).length ? existing.attributes : normalizeAttributes(metadata.attributes, described.part);
-    const record = {
-      id,
-      ...described,
-      attributes,
-      attributesSource: existing?.attributesSource || (Object.keys(attributes).length ? "model" : null),
-      image: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
-      thumbnail: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
-      modeledImage: modeledImage || existing?.modeledImage || null,
-      importJobId: job.id,
-    };
-    const next = [...records.filter((item) => item.id !== id), record];
-    await atomicJson(importedFile, next);
-    return record;
+    return changeLibrary((records) => {
+      const existing = records.find((record) => record.id === id);
+      // Once an item is in the library, its library record owns the description, including later edits.
+      const described = existing ? {
+        name: existing.name, part: existing.part, color: existing.color, secondaryColor: existing.secondaryColor,
+        palette: existing.palette, tags: existing.tags,
+      } : {
+        name: metadata.name || "New piece",
+        part: metadata.part || "upperbody",
+        color: metadata.color || "#d8d0c2",
+        secondaryColor: metadata.secondaryColor || null,
+        palette: [metadata.color, metadata.secondaryColor].filter(Boolean),
+        tags: Array.isArray(metadata.tags) ? metadata.tags : [],
+      };
+      // Keep the library's attributes once described or edited, even when the user cleared them all.
+      const keep = existing && (Object.keys(existing.attributes || {}).length || existing.attributesSource === "user");
+      const attributes = keep ? existing.attributes || {} : normalizeAttributes(metadata.attributes, described.part);
+      const record = {
+        id,
+        ...described,
+        attributes,
+        attributesSource: existing?.attributesSource || (Object.keys(attributes).length ? "model" : null),
+        image: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
+        thumbnail: `${LIBRARY_ASSET_ROOT}/${garmentName}`,
+        modeledImage: modeledImage || existing?.modeledImage || null,
+        importJobId: job.id,
+      };
+      return { next: [...records.filter((item) => item.id !== id), record], result: record };
+    });
+  }
+
+  // Describes a garment accepted through manual background cleanup, which skips the description in generate().
+  async function describeAccepted(jobId, bytes) {
+    const job = await loadJob(jobId);
+    if (!job) return;
+    const attributes = await describeGarment({ ...llm(), model: visionModel(setting), image: bytes, item: job.metadata })
+      .catch((error) => { console.warn(`Could not describe ${job.metadata.name}: ${error.message}`); return null; });
+    if (!attributes || !Object.keys(attributes).length) return;
+    const latest = await loadJob(jobId);
+    if (latest) { latest.metadata = { ...latest.metadata, attributes }; await saveJob(latest); }
+    await changeLibrary((records) => {
+      const record = records.find((entry) => entry.id === `import-${jobId}`);
+      if (!record || record.attributesSource === "user" || Object.keys(record.attributes || {}).length) return { next: null };
+      record.attributes = normalizeAttributes(attributes, record.part);
+      record.attributesSource = "model";
+      return { next: records };
+    });
   }
 
   async function generate(job, stageName) {
@@ -511,29 +543,32 @@ export function wardrobeImportApi(options = {}) {
       const wardrobeItemMatch = url.pathname.match(/^\/api\/import\/wardrobe\/(import-[a-f0-9-]{36})$/i);
       if (wardrobeItemMatch && req.method === "PATCH") {
         const input = await body(req, 64 * 1024);
-        const records = await loadImported();
-        const index = records.findIndex((record) => record.id === wardrobeItemMatch[1]);
-        if (index < 0) return json(res, 404, { error: "Imported wardrobe item not found" });
-        const current = records[index];
-        const { name, part, color, secondaryColor, tags } = normalizeMetadata({ ...current, ...input });
-        const edited = input.attributes && typeof input.attributes === "object" && !Array.isArray(input.attributes);
-        // Valid values replace, null clears, and anything invalid leaves the current value alone.
-        const attributes = { ...current.attributes, ...(edited ? normalizeAttributes(input.attributes, part) : {}) };
-        for (const [key, value] of Object.entries(edited ? input.attributes : {})) if (value === null) delete attributes[key];
-        records[index] = {
-          ...current, name, part, color, secondaryColor, tags,
-          attributes: normalizeAttributes(attributes, part),
-          ...(edited ? { attributesSource: "user" } : {}),
-        };
-        await atomicJson(importedFile, records);
-        return json(res, 200, records[index]);
+        const updated = await changeLibrary((records) => {
+          const index = records.findIndex((record) => record.id === wardrobeItemMatch[1]);
+          if (index < 0) return { next: null, result: null };
+          const current = records[index];
+          const { name, part, color, secondaryColor, tags } = normalizeMetadata({ ...current, ...input });
+          const edited = input.attributes && typeof input.attributes === "object" && !Array.isArray(input.attributes);
+          // Valid values replace, null clears, and anything invalid leaves the current value alone.
+          const attributes = { ...current.attributes, ...(edited ? normalizeAttributes(input.attributes, part) : {}) };
+          for (const [key, value] of Object.entries(edited ? input.attributes : {})) if (value === null) delete attributes[key];
+          records[index] = {
+            ...current, name, part, color, secondaryColor, tags,
+            attributes: normalizeAttributes(attributes, part),
+            ...(edited ? { attributesSource: "user" } : {}),
+          };
+          return { next: records, result: records[index] };
+        });
+        if (!updated) return json(res, 404, { error: "Imported wardrobe item not found" });
+        return json(res, 200, updated);
       }
       if (wardrobeItemMatch && req.method === "DELETE") {
         const id = wardrobeItemMatch[1];
-        const records = await loadImported();
-        const next = records.filter((record) => record.id !== id);
-        if (next.length === records.length) return json(res, 404, { error: "Imported wardrobe item not found" });
-        await atomicJson(importedFile, next);
+        const removed = await changeLibrary((records) => {
+          const next = records.filter((record) => record.id !== id);
+          return next.length === records.length ? { next: null, result: false } : { next, result: true };
+        });
+        if (!removed) return json(res, 404, { error: "Imported wardrobe item not found" });
         await Promise.all([
           rm(path.join(libraryAssetDir, `${id}-garment.png`), { force: true }),
           rm(path.join(libraryAssetDir, `${id}-modeled.png`), { force: true }),
@@ -638,6 +673,7 @@ export function wardrobeImportApi(options = {}) {
           stage.assetUrl = previewUrl;
         }
         await saveJob(job);
+        if (cleanupAction[1] === "cleanup-accept" && llm().configured) void describeAccepted(job.id, cleaned.bytes);
         return json(res, 200, publicJob(job));
       }
       const stageMatch = action.match(/^stages\/(crop|garment|modeled)\/(approve|reject|regenerate)$/);
@@ -666,9 +702,10 @@ export function wardrobeImportApi(options = {}) {
         const startModeled = stageName === "garment" && decision === "approve" && job.stages.modeled.status === "pending";
         if (stageName === "modeled" && decision === "approve") job.status = "complete";
         await saveJob(job);
+        let record = null;
         if (decision === "approve" && stageName !== "crop") {
           try {
-            await persistImported(job, stageName === "modeled");
+            record = await persistImported(job, stageName === "modeled");
           } catch (error) {
             job.stages[stageName].status = previousStatus;
             job.stages[stageName].decision = previousDecision;
@@ -680,7 +717,8 @@ export function wardrobeImportApi(options = {}) {
         if (decision === "reject") await rm(path.join(jobsDir, job.id), { recursive: true, force: true });
         if (startGarment) void generate(job, "garment");
         if (startModeled) void generate(job, "modeled");
-        const response = publicJob(job);
+        // The saved library record lets the page show the item with its described attributes right away.
+        const response = record ? { ...publicJob(job), record } : publicJob(job);
         if (job.status === "complete") await rm(path.join(jobsDir, job.id), { recursive: true, force: true });
         return json(res, 200, response);
       }

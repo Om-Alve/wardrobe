@@ -342,7 +342,8 @@ export function stylistApi(options = {}) {
           : weather?.summary || "not supplied; do not assume a forecast";
         const profile = await readProfile(path.resolve(root, setting("WARDROBE_DATA_DIR", "data")));
         const wearer = profileSummary(profile);
-        const context = `Occasion: ${occasion || "everyday"}\nConditions: ${conditionsText}\nUser request: ${brief || "comfortable, considered outfits"}${wearer ? `\n${wearer}` : ""}`;
+        const anchor = available.find((item) => item.id === anchorId);
+        const context = `Occasion: ${occasion || "everyday"}\nConditions: ${conditionsText}\nUser request: ${brief || "comfortable, considered outfits"}${anchor ? `\nAnchor piece, worn in every look: ${handleOf.get(anchor.id)} ${anchor.name}` : ""}${wearer ? `\n${wearer}` : ""}`;
 
         emit("plan");
         const planLines = sorted.map((item) => planLine(item, handleOf));
@@ -354,7 +355,16 @@ export function stylistApi(options = {}) {
 
         emit("candidates");
         const feedback = deriveFeedback(state, await library());
-        const { looks: pool, gaps, notes: gapNotes, mentioned } = enumerateLooks(available, plan, { anchorId, rejectedSets: feedback.rejectedSets, rejectedPairs: feedback.rejectedPairs });
+        let { looks: pool, gaps, notes: gapNotes, mentioned } = enumerateLooks(available, plan, { anchorId, rejectedSets: feedback.rejectedSets, rejectedPairs: feedback.rejectedPairs });
+        if (!pool.length && (feedback.rejectedSets.size || feedback.rejectedPairs.size)) {
+          // Turning looks down should not leave the wearer with nothing; show those looks again and say why.
+          const again = enumerateLooks(available, plan, { anchorId });
+          if (again.looks.length) {
+            ({ looks: pool, gaps, notes: gapNotes, mentioned } = again);
+            gaps.push("Every look that fits was turned down earlier, so they are offered again.");
+            gapNotes.push("Every look that fits was one you turned down, so they are shown again.");
+          }
+        }
         if (!pool.length) throw bad(`No combination in this selection fits the request. ${gaps.join(" ")}`.trim(), 422);
         const shortlist = buildShortlist(pool.map((look) => {
           const history = scoreLook(look, feedback);
@@ -363,7 +373,10 @@ export function stylistApi(options = {}) {
         }));
         const want = Math.min(count, shortlist.length);
         const accessories = new Map(sorted.filter((item) => item.part === "accessories_up").map((item) => [handleOf.get(item.id), item]));
-        const required = [anchorId, ...plan.include].map((id) => available.find((item) => item.id === id)).filter((item) => item?.part === "accessories_up");
+        // A look holds two accessories at most, so the anchor and the first piece the plan asks for come first.
+        const asked = [...new Set([anchorId, ...plan.include])].map((id) => available.find((item) => item.id === id)).filter((item) => item?.part === "accessories_up");
+        const required = asked.slice(0, 2);
+        if (asked.length > 2) gapNotes.push(`A look holds two accessories, so ${asked.slice(2).map((item) => `"${item.name}"`).join(" and ")} ${asked.length > 3 ? "are" : "is"} left out.`);
         const used = new Set(shortlist.flatMap((look) => look.ids));
         const legend = sorted.filter((item) => used.has(item.id)).map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
         const accessoryLegend = [...accessories.values()].map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
@@ -408,7 +421,7 @@ export function stylistApi(options = {}) {
       }
       if (url.pathname === `${BASE}/buy-next` && req.method === "POST") {
         const body = await input(req);
-        const names = [...new Set((Array.isArray(body.occasions) ? body.occasions : []).map((name) => field(name, 60).toLowerCase()).filter(Boolean))];
+        const names = [...new Set((Array.isArray(body.occasions) ? body.occasions : []).map((name) => field(name, 80).toLowerCase()).filter(Boolean))];
         if (!names.length || names.length > 8) throw bad("Name 1 to 8 occasions.");
         if (!llm().configured) throw bad("Configure WARDROBE_LLM_API_KEY or WARDROBE_LLM_BASE_URL in .env and restart the app.", 422);
         const items = await library();
@@ -494,6 +507,8 @@ export function stylistApi(options = {}) {
         if (current.tripId && !trip) throw bad("Trip not found.", 404);
         const selectedSet = new Set(current.selectionIds || []);
         const available = eligibleItems(trip, await library()).filter((item) => selectedSet.has(item.id));
+        const missing = [...current.garmentIds, current.anchorId].filter(Boolean).filter((id) => !available.some((item) => item.id === id));
+        if (missing.length) throw bad("Some pieces of this look are no longer available, so it cannot be revised. Ask for new looks instead.", 409);
         const { handleOf, itemOf, sorted } = assignHandles(available);
         const wearer = profileSummary(await readProfile(path.resolve(root, setting("WARDROBE_DATA_DIR", "data"))));
         const options = singleChanges(current.garmentIds, available, handleOf, { anchorId: current.anchorId });

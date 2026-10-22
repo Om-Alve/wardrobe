@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -58,7 +58,18 @@ try {
   assert.equal(result.status, 202, JSON.stringify(result.body));
   assert.equal(result.body.jobs[0].metadata.name, "Olive shirt");
   assert.equal(chatCalls, 1);
-  console.log("Importer verified with a keyless local vision endpoint and a separate image key.");
+
+  const ids = Array.from({ length: 6 }, (_, index) => `import-00000000-0000-0000-0000-00000000000${index}`);
+  await writeFile(path.join(root, "data/library.json"), JSON.stringify(ids.map((id) => ({ id, name: "Old name", part: "upperbody", color: "#53694e", tags: [] }))));
+  const results = await Promise.all([
+    ...ids.slice(0, 5).map((id, index) => invoke(`/wardrobe/${id}`, "PATCH", { name: `Renamed ${index}`, attributes: { formality: 3 } })),
+    invoke(`/wardrobe/${ids[5]}`, "DELETE"),
+  ]);
+  assert.ok(results.every((result) => result.status === 200), JSON.stringify(results.map((result) => result.status)));
+  const library = JSON.parse(await readFile(path.join(root, "data/library.json"), "utf8"));
+  assert.deepEqual(library.map((item) => item.name).sort(), ids.slice(0, 5).map((_, index) => `Renamed ${index}`), "Concurrent edits and a delete all land, and the deleted item stays deleted.");
+  assert.ok(library.every((item) => item.attributes.formality === 3 && item.attributesSource === "user"));
+  console.log("Importer verified with a keyless local vision endpoint and a separate image key, and concurrent library edits.");
 } finally {
   globalThis.fetch = originalFetch;
   await rm(root, { recursive: true, force: true });

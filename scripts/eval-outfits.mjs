@@ -216,6 +216,57 @@ try {
   assert.equal(byName["Grey dress trousers"].why, `Pairs with ${name("dress-shirt")}.`, "Handles in explanations become garment names.");
   assert.deepEqual((await invoke("/buy-next", "GET")).body.last.results.map((result) => result.item.name), review.body.results.map((result) => result.item.name), "The last review is kept.");
 
+  const blackTie = () => ({ plans: [{ occasion: "black tie", plan: { ...PLAN, formality: [5, 5], shoeFormality: [5, 5] } }] });
+  const tuxShirt = piece("Tuxedo shirt", "upperbody", "#f8f8f4", { category: "dress_shirt", formality: 5, warmth: 1 });
+  const tuxTrousers = piece("Tuxedo trousers", "lowerbody", "#1d2840", { category: "dress_trousers", formality: 5, warmth: 1 });
+  queue(blackTie, () => ({ candidates: [tuxShirt, tuxTrousers, piece("Patent oxfords", "shoes", "#141414", { category: "dress_shoes", formality: 5, warmth: 1 }), piece("Linen shorts", "lowerbody", "#d8c7a6", { category: "shorts", formality: 1, warmth: 0 })] }));
+  const tie = Object.fromEntries((await invoke("/buy-next", "POST", { occasions: ["Black tie"] })).body.results.map((result) => [result.item.name, result]));
+  assert.deepEqual(["Tuxedo shirt", "Tuxedo trousers", "Patent oxfords"].map((piece) => tie[piece].step), [1, 1, 1], "Pieces that only help together are recommended as one step.");
+  assert.deepEqual([...tie["Tuxedo shirt"].together].sort(), ["Patent oxfords", "Tuxedo trousers"]);
+  assert.equal(tie["Tuxedo shirt"].added, 1);
+  assert.equal(tie["Linen shorts"].note, "It does not fit the plan for any of these occasions.");
+  queue(blackTie, () => ({ candidates: [tuxShirt, tuxTrousers] }));
+  const incomplete = (await invoke("/buy-next", "POST", { occasions: ["Black tie"] })).body.results.find((result) => result.item.name === "Tuxedo shirt");
+  assert.match(incomplete.note, /^It would need other pieces too\. For black tie: No bottoms dressy enough; the closest you have is "Black formal trousers"\. No shoes dressy enough; you have "Running sneakers"\./, "A piece that cannot complete an outfit yet says what else is missing, not that it is covered.");
+
+  queue(planWith(CASUAL, (handleOf) => ({ include: [handleOf.get(name("hoodie"))] })), pickBy((list) => list.slice(0, 1)));
+  const anchored = await suggest({ count: 1, occasion: "Errands", anchorId: "tee", selectedItemIds: ["tee", "hoodie", "cargo", "relaxed-trousers", "sneakers"] });
+  assert.equal(anchored.status, 201, JSON.stringify(anchored.body));
+  assert.match(prompts[0], /Anchor piece, worn in every look: T\d+ White cotton T-shirt/, "The plan is told about the anchor.");
+  assert.ok(candidates(prompts[1]).every((entry) => entry.names.includes(name("tee"))), "The anchor stays in every candidate even when the plan asks for another top.");
+
+  queue(plan(CASUAL), pickBy((list) => list.slice(0, 1)));
+  const doomed = (await suggest({ count: 1, occasion: "Errands", selectedItemIds: ["hoodie", "relaxed-trousers", "sneakers"] })).body[0];
+  await writeFile(path.join(dataDir, "library.json"), JSON.stringify(items.filter((item) => item.id !== doomed.garmentIds[1])));
+  queue();
+  const stale = await invoke(`/looks/${doomed.id}/revise`, "POST", { message: "Something lighter." });
+  assert.equal(stale.status, 409, "A look whose pieces are gone cannot be revised.");
+  assert.equal(prompts.length, 0, "No model call is spent on it.");
+  await writeFile(path.join(dataDir, "library.json"), JSON.stringify(items));
+
+  queue(plan(FORMAL), pickBy((list) => list.slice(0, 1)));
+  const lone = (await suggest({ count: 1, occasion: "Formal dinner", selectedItemIds: ["dress-shirt", "formal-trousers"] })).body[0];
+  await invoke(`/looks/${lone.id}/verdict`, "POST", { verdict: "down" });
+  queue(plan(FORMAL), pickBy((list) => list.slice(0, 1)));
+  const offeredAgain = await suggest({ count: 1, occasion: "Formal dinner", selectedItemIds: ["dress-shirt", "formal-trousers"] });
+  assert.equal(offeredAgain.status, 201, "Turning down the only fitting look does not leave the request with nothing.");
+  assert.match(offeredAgain.body[0].gapNotes.join(" "), /turned down/);
+
+  queue(plan(CASUAL), (prompt) => ({ picks: [{ look: candidates(prompt)[0].label, accessories: [], name: "Drinks", reason: "Easy enough for a wine bar." }] }));
+  await suggest({ count: 1, occasion: "Drinks", selectedItemIds: ["hoodie", "relaxed-trousers", "sneakers"] });
+  assert.equal(prompts.length, 2, "Words like wine are not taken as color claims.");
+
+  const many = (part, count, extra = {}) => Array.from({ length: count }, (_, index) => ({
+    id: `${part}-${index}`, name: `${part} ${index}`, part, color: `#${(40 + index * 6).toString(16).padStart(2, "0")}6070`, tags: [], attributes: { formality: 2, warmth: 1, ...extra },
+  }));
+  const big = [...many("upperbody", 30), ...many("lowerbody", 20), ...many("wholebody_up", 10), ...many("shoes", 20)];
+  await writeFile(path.join(dataDir, "library.json"), JSON.stringify(big));
+  queue(plan(CASUAL), pickBy((list) => list.slice(0, 1)));
+  const crowded = await suggest({ count: 1, occasion: "Errands", selectedItemIds: big.map((item) => item.id) });
+  assert.equal(crowded.status, 201, "A wardrobe with over a hundred thousand combinations still gets suggestions.");
+  assert.ok(candidates(prompts[1]).length <= 20);
+  await writeFile(path.join(dataDir, "library.json"), JSON.stringify(items));
+
   const profileFile = path.join(dataDir, "profile.json");
   await writeFile(profileFile, JSON.stringify({ enabled: true, contrast: "high", hairLightness: "dark", avoidedColors: ["olive"], fit: "relaxed" }));
   queue(plan(CASUAL), pickBy((list) => list.slice(0, 1)));
@@ -249,7 +300,7 @@ try {
   assert.equal(fallback.status, 201, JSON.stringify(fallback.body));
   assert.deepEqual(efforts, ["none", null, "none", null], "A provider that rejects the reasoning setting gets each request again without it.");
 
-  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, what-to-buy order with alternatives, owned twins, and counted reasons, and chosen-clothes Wada reference.");
+  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, what-to-buy order with alternatives, owned twins, and counted reasons, pieces that only work together, anchor over plan includes, stale revisions, re-offered turned-down looks, non-color words, a very large wardrobe, and chosen-clothes Wada reference.");
 } finally {
   globalThis.fetch = realFetch;
   await rm(workspace, { recursive: true, force: true });
