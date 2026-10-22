@@ -77,6 +77,7 @@ Garment cutouts use a 1024 × 1024 transparent canvas. To reframe older local im
 | `WARDROBE_LLM_MODEL` | `gpt-5.4-mini` |
 | `WARDROBE_VISION_MODEL` | `WARDROBE_LLM_MODEL` |
 | `WARDROBE_STYLIST_MODEL` | `WARDROBE_LLM_MODEL` |
+| `WARDROBE_REASONING_EFFORT` | Provider default; `none` makes outfit suggestions much faster on models that support it |
 | `OPENAI_IMAGE_API_KEY` | Required only for cutouts and modeled photos |
 | `OPENAI_IMAGE_BASE_URL` | `https://api.openai.com/v1` |
 | `OPENAI_IMAGE_MODEL` | `gpt-image-2` |

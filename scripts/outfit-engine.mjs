@@ -85,6 +85,8 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
   const names = (list) => list.map((item) => `"${item.name}"`).join(", ");
   const limits = (maxWarmth, [lowest, highest] = plan.formality) => `formality ${lowest}-${highest}${maxWarmth === null ? "" : ` and warmth up to ${maxWarmth}`}`;
   const gaps = [];
+  // Pieces a reason may name without wearing them: ones the request ruled out and ones a gap points to.
+  const mentioned = items.filter((item) => excluded.has(item.id));
   const choose = (part, maxWarmth) => {
     const pool = items.filter((item) => item.part === part && !excluded.has(item.id));
     const pinned = pool.filter((item) => required.has(item.id));
@@ -110,14 +112,20 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
   else if (plan.outerLayer === "needed" && layerChoice.fitting.length) layers = layerChoice.fitting;
   else {
     layers = [null, ...layerChoice.fitting];
-    if (plan.outerLayer === "needed") gaps.push(`The conditions call for an outer layer, but none fits ${limits(plan.layerMaxWarmth)}${layerChoice.pool.length ? `; the wardrobe has ${names(layerChoice.pool)}` : ""}.`);
+    if (plan.outerLayer === "needed") {
+      gaps.push(`The conditions call for an outer layer, but none fits ${limits(plan.layerMaxWarmth)}${layerChoice.pool.length ? `; the wardrobe has ${names(layerChoice.pool)}` : ""}.`);
+      mentioned.push(...layerChoice.pool);
+    }
   }
 
   const shoeChoice = choose("shoes", plan.maxWarmth);
   let shoes = shoeChoice.fitting;
   if (!shoes.length) {
     shoes = [null];
-    if (shoeChoice.pool?.length) gaps.push(`No shoes fit ${limits(plan.maxWarmth, plan.shoeFormality)}, so looks leave shoes out; the wardrobe has ${names(shoeChoice.pool)}.`);
+    if (shoeChoice.pool?.length) {
+      gaps.push(`No shoes fit ${limits(plan.maxWarmth, plan.shoeFormality)}, so looks leave shoes out; the wardrobe has ${names(shoeChoice.pool)}.`);
+      mentioned.push(...shoeChoice.pool);
+    }
   }
 
   // Pinned pieces already limit their slot above, so every look includes one of them.
@@ -131,7 +139,7 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
       looks.push({ ids, pieces });
     }
   }
-  return { looks, gaps };
+  return { looks, gaps, mentioned };
 }
 
 export function deltaE2000([L1, a1, b1], [L2, a2, b2]) {
@@ -256,7 +264,7 @@ export function candidateLine(look, handleOf) {
 }
 
 // Checks the model's picks against the shortlist it was given.
-export function validatePicks(raw, shortlist, accessories, count, { required = [] } = {}) {
+export function validatePicks(raw, shortlist, accessories, count, { required = [], mentioned = [], checkReasons = false } = {}) {
   const picks = raw?.picks;
   if (!Array.isArray(picks) || picks.length !== count) throw new Error(`Return exactly ${count} picks in "picks".`);
   const byLabel = new Map(shortlist.map((look) => [look.label, look]));
@@ -267,7 +275,8 @@ export function validatePicks(raw, shortlist, accessories, count, { required = [
   const pairs = labels.map((label) => byLabel.get(label).ids.slice(0, 2).join("|"));
   const distinctPairs = new Set(shortlist.map((look) => look.ids.slice(0, 2).join("|"))).size;
   if (new Set(pairs).size < Math.min(count, distinctPairs)) throw new Error("Choose looks with a different top or bottom from each other; the list has enough of them.");
-  return picks.map((pick) => {
+  const misdescribed = [];
+  const valid = picks.map((pick) => {
     const extras = pick.accessories === undefined || pick.accessories === null ? [] : pick.accessories;
     if (!Array.isArray(extras) || extras.length > 2 || new Set(extras).size !== extras.length) throw new Error(`Give "accessories" for ${pick.look} as up to two different A handles.`);
     const missing = extras.filter((handle) => !accessories.has(handle));
@@ -275,8 +284,36 @@ export function validatePicks(raw, shortlist, accessories, count, { required = [
     const ids = [...byLabel.get(pick.look).ids, ...extras.map((handle) => accessories.get(handle).id)];
     const absent = required.filter((item) => !ids.includes(item.id));
     if (absent.length) throw new Error(`Every look must include ${absent.map((item) => `"${item.name}"`).join(" and ")}.`);
+    const claimed = unsupportedColors(pick.reason, [...byLabel.get(pick.look).pieces, ...extras.map((handle) => accessories.get(handle)), ...mentioned]);
+    if (claimed.length) misdescribed.push(`${pick.look} mentions ${claimed.join(" and ")}`);
     return { look: byLabel.get(pick.look), garmentIds: ids, name: pick.name, reason: pick.reason };
   });
+  if (checkReasons && misdescribed.length) throw new Error(`Describe only colors the chosen pieces have: ${misdescribed.join("; ")}, which ${misdescribed.length === 1 ? "is" : "are"} not in the look.`);
+  return valid;
+}
+
+// Color words a reason may use, grouped into families so "grey-blue" or "deep red" for burgundy still count as true.
+const COLOR_FAMILIES = {
+  black: ["black"], white: ["white"], "off-white": ["white"], ivory: ["white"], cream: ["white", "tan"], ecru: ["white", "tan"],
+  grey: ["grey"], gray: ["grey"], charcoal: ["grey", "black"], silver: ["grey"], slate: ["blue", "grey"],
+  navy: ["blue"], blue: ["blue"], denim: ["blue"], indigo: ["blue"], teal: ["blue", "green"],
+  green: ["green"], olive: ["green", "tan"], sage: ["green"], mint: ["green"], khaki: ["tan", "green"],
+  tan: ["tan"], beige: ["tan"], stone: ["tan", "grey"], camel: ["tan", "brown"], brown: ["brown"], chocolate: ["brown"],
+  burgundy: ["red"], wine: ["red"], maroon: ["red"], red: ["red"], rust: ["orange", "red"], terracotta: ["orange"], orange: ["orange"],
+  mustard: ["yellow"], yellow: ["yellow"], gold: ["yellow"], pink: ["pink"], coral: ["pink", "orange"],
+  purple: ["purple"], plum: ["purple", "red"], lavender: ["purple"],
+};
+const COLOR_WORD = new RegExp(`\\b(${Object.keys(COLOR_FAMILIES).sort((a, b) => b.length - a.length).join("|")})\\b`, "gi");
+
+// Colors a reason claims that none of the look's garments have, by measured color, name, or tags.
+export function unsupportedColors(reason, pieces) {
+  const present = new Set();
+  for (const item of pieces) {
+    const text = [item.name, ...(item.tags || []), ...[item.color, item.secondaryColor].map((hex) => colorProfile(hex)?.name || "")].join(" ");
+    for (const [word] of text.matchAll(COLOR_WORD)) COLOR_FAMILIES[word.toLowerCase()].forEach((family) => present.add(family));
+  }
+  const claimed = [...new Set([...String(reason || "").matchAll(COLOR_WORD)].map(([word]) => word.toLowerCase()))];
+  return claimed.filter((word) => !COLOR_FAMILIES[word].some((family) => present.has(family)));
 }
 
 // One-step edits of a look: swap, remove, or add a single piece. Revisions prefer these over rebuilding the look.

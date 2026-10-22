@@ -4,7 +4,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { deriveFeedback, today } from "./feedback.mjs";
 import { describeItem, normalizeAttributes } from "./garment-attributes.mjs";
-import { assignHandles, buildShortlist, candidateLine, describePlan, enumerateLooks, partLabel, scoreLook, singleChanges, validatePicks, validatePlan } from "./outfit-engine.mjs";
+import { assignHandles, buildShortlist, candidateLine, describePlan, enumerateLooks, partLabel, scoreLook, singleChanges, unsupportedColors, validatePicks, validatePlan } from "./outfit-engine.mjs";
 import { eligibleItems, PACK_STATES, relevantPalettes, validateLook, warningsFor } from "./stylist-core.mjs";
 import { chatJson, imageSettings, llmSettings } from "./llm-client.mjs";
 
@@ -65,21 +65,22 @@ async function atomicJson(file, value) {
   await rename(temporary, file);
 }
 
-async function askModel({ key, baseUrl, model, prompt, shape, onProgress, signal }) {
+async function askModel({ key, baseUrl, model, prompt, shape, onProgress, signal, reasoningEffort }) {
   try {
-    return await chatJson({ key, baseUrl, model, prompt: `${prompt}\nReturn JSON in this exact shape: ${shape}.`, timeout: 300000, onProgress, signal });
+    return await chatJson({ key, baseUrl, model, prompt: `${prompt}\nReturn JSON in this exact shape: ${shape}.`, timeout: 300000, onProgress, signal, reasoningEffort });
   } catch (error) {
     if (error.name === "TimeoutError") throw bad("The LLM took more than five minutes. Try fewer looks or a smaller item selection.", 504);
     throw bad(`The LLM could not suggest outfits: ${error.message}`, 502);
   }
 }
 
-// Asks once, and once more with the reason when the answer fails its check.
+// Asks once, and once more with the reason when the answer fails its check. The check learns which attempt it is,
+// so soft checks can ask for one correction and then accept.
 async function askUntilValid({ check, failure, onRetry, prompt, ...request }) {
   let feedback = "";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await askModel({ ...request, prompt: feedback ? `${prompt}\nYour previous answer was rejected: ${feedback} Answer again.` : prompt });
-    try { return check(raw); }
+    try { return check(raw, attempt); }
     catch (error) {
       if (attempt) throw bad(`${failure}: ${error.message}`, 502);
       feedback = error.message;
@@ -345,7 +346,7 @@ export function stylistApi(options = {}) {
 
         emit("candidates");
         const feedback = deriveFeedback(state, await library());
-        const { looks: pool, gaps } = enumerateLooks(available, plan, { anchorId, rejectedSets: feedback.rejectedSets, rejectedPairs: feedback.rejectedPairs });
+        const { looks: pool, gaps, mentioned } = enumerateLooks(available, plan, { anchorId, rejectedSets: feedback.rejectedSets, rejectedPairs: feedback.rejectedPairs });
         if (!pool.length) throw bad(`No combination in this selection fits the request. ${gaps.join(" ")}`.trim(), 422);
         const shortlist = buildShortlist(pool.map((look) => ({ ...look, ...scoreLook(look, feedback) })));
         const want = Math.min(count, shortlist.length);
@@ -355,14 +356,14 @@ export function stylistApi(options = {}) {
         const legend = sorted.filter((item) => used.has(item.id)).map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
         const accessoryLegend = [...accessories.values()].map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
         const palettesText = palettes.map((palette) => `#${palette.id}: ${palette.colors.map((color) => `${color.name} ${color.hex}`).join(", ")}`).join("\n");
-        const pickPrompt = `You are a practical personal stylist. Choose exactly ${want} looks for this request from the candidates below. Every candidate already fits the plan, the weather, and the selected wardrobe, so judge which combine best for the occasion and the user's request: color, texture, proportion, and variety. Choose looks that differ in top or bottom whenever the candidates allow. Notes after a candidate come from the user's own history. You may add up to two accessories (A handles) to a look when they serve the occasion or the request${required.length ? `; every look must include ${required.map((item) => handleOf.get(item.id)).join(" and ")}` : ""}. ${gaps.length ? "Mention the relevant gap briefly in the reason. " : ""}${STYLING_GUIDANCE}\n\n${context}\nPlan: ${describePlan(plan)}.${gaps.length ? `\nGaps: ${gaps.join(" ")}` : ""}\n\nPieces:\n${legend.join("\n")}\n\nAccessories:\n${accessoryLegend.join("\n") || "none"}\n\nCandidates:\n${shortlist.map((look) => candidateLine(look, handleOf)).join("\n")}\n\nRelevant Wada palettes:\n${palettesText}`;
+        const pickPrompt = `You are a practical personal stylist. Choose exactly ${want} looks for this request from the candidates below. Every candidate already fits the plan, the weather, and the selected wardrobe, so judge which combine best for the occasion and the user's request: color, texture, proportion, and variety. Choose looks that differ in top or bottom whenever the candidates allow. Each reason is shown on its own card, so describe only that look's pieces and do not compare it with the other picks. Notes after a candidate come from the user's own history. You may add up to two accessories (A handles) to a look when they serve the occasion or the request${required.length ? `; every look must include ${required.map((item) => handleOf.get(item.id)).join(" and ")}` : ""}. ${gaps.length ? "Mention the relevant gap briefly in the reason. " : ""}${STYLING_GUIDANCE}\n\n${context}\nPlan: ${describePlan(plan)}.${gaps.length ? `\nGaps: ${gaps.join(" ")}` : ""}\n\nPieces:\n${legend.join("\n")}\n\nAccessories:\n${accessoryLegend.join("\n") || "none"}\n\nCandidates:\n${shortlist.map((look) => candidateLine(look, handleOf)).join("\n")}\n\nRelevant Wada palettes:\n${palettesText}`;
 
         emit("model");
         const picks = await askUntilValid({
           ...llm(), model, signal, onProgress: streaming ? emit : undefined, onRetry: () => emit("retrying"),
           shape: `{"picks":[{"look":"L1","accessories":["A1"],"name":"...","reason":"..."}]} with exactly ${want} picks`,
           failure: "The LLM did not return usable looks", prompt: pickPrompt,
-          check: (raw) => { emit("checking"); return validatePicks(raw, shortlist, accessories, want, { required }); },
+          check: (raw, attempt) => { emit("checking"); return validatePicks(raw, shortlist, accessories, want, { required, mentioned, checkReasons: attempt === 0 }); },
         });
         const ideas = picks.map((pick) => validateLook({ name: pick.name, reason: pick.reason, occasion: occasion || "everyday", garmentIds: pick.garmentIds }, available));
         const now = new Date().toISOString();
@@ -443,7 +444,7 @@ export function stylistApi(options = {}) {
         const idea = await askUntilValid({
           ...llm(), model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
           prompt, shape: REVISE_SHAPE, failure: "The LLM returned an invalid revision",
-          check: (raw) => {
+          check: (raw, attempt) => {
             let ids;
             if (raw.change) {
               const option = options.find((entry) => entry.label === raw.change);
@@ -457,6 +458,9 @@ export function stylistApi(options = {}) {
             }
             const look = validateLook({ name: raw.name, reason: raw.reason, occasion: current.occasion, garmentIds: ids }, available);
             if (current.anchorId && !look.garmentIds.includes(current.anchorId)) throw new Error("Keep the anchor piece in the look.");
+            const pieces = [...new Set([...look.garmentIds, ...current.garmentIds])].map((id) => available.find((item) => item.id === id)).filter(Boolean);
+            const claimed = unsupportedColors(look.reason, pieces);
+            if (attempt === 0 && claimed.length) throw new Error(`Describe only colors the pieces have; the reason mentions ${claimed.join(" and ")}, which ${claimed.length === 1 ? "is" : "are"} not in the look.`);
             return look;
           },
         });

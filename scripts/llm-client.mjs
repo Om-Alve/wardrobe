@@ -4,6 +4,7 @@ export function llmSettings(setting) {
     key: setting("WARDROBE_LLM_API_KEY") || (customBase ? "" : setting("OPENAI_API_KEY")),
     baseUrl: (customBase || setting("OPENAI_API_BASE_URL", "https://api.openai.com/v1")).replace(/\/$/, ""),
     configured: Boolean(setting("WARDROBE_LLM_API_KEY") || customBase || setting("OPENAI_API_KEY")),
+    reasoningEffort: setting("WARDROBE_REASONING_EFFORT"),
   };
 }
 
@@ -58,18 +59,25 @@ async function streamedAnswer(response, onProgress) {
   } finally { reader.releaseLock(); }
 }
 
-export async function chatJson({ key, baseUrl, model, prompt, image, mime = "image/png", timeout = 90000, onProgress, signal }) {
+export async function chatJson({ key, baseUrl, model, prompt, image, mime = "image/png", timeout = 90000, onProgress, signal, reasoningEffort }) {
   const content = image ? [
     { type: "text", text: `${prompt}\nReturn only a valid JSON object, without Markdown fences or commentary.` },
     { type: "image_url", image_url: { url: `data:${mime};base64,${image.toString("base64")}` } },
   ] : `${prompt}\nReturn only a valid JSON object, without Markdown fences or commentary.`;
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const deadline = signal ? AbortSignal.any([AbortSignal.timeout(timeout), signal]) : AbortSignal.timeout(timeout);
+  const send = (effort) => fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(key ? { Authorization: `Bearer ${key}` } : {}) },
-    body: JSON.stringify({ model, messages: [{ role: "user", content }], ...(onProgress ? { stream: true } : {}) }),
-    signal: signal ? AbortSignal.any([AbortSignal.timeout(timeout), signal]) : AbortSignal.timeout(timeout),
+    body: JSON.stringify({ model, messages: [{ role: "user", content }], ...(effort ? { reasoning_effort: effort } : {}), ...(onProgress ? { stream: true } : {}) }),
+    signal: deadline,
   });
-  const result = response.ok && onProgress ? null : await response.json().catch(() => ({}));
+  let response = await send(reasoningEffort);
+  let result = response.ok && onProgress ? null : await response.json().catch(() => ({}));
+  // Providers that do not accept this reasoning setting reject the request; ask again without it.
+  if (reasoningEffort && response.status === 400 && /reasoning/i.test(result.error?.message || result.message || "")) {
+    response = await send("");
+    result = response.ok && onProgress ? null : await response.json().catch(() => ({}));
+  }
   if (!response.ok) throw new Error(result.error?.message || `LLM request failed (${response.status})`);
   const answer = onProgress ? await streamedAnswer(response, onProgress) : result.choices?.[0]?.message?.content;
   const text = typeof answer === "string" ? answer : Array.isArray(answer) ? answer.filter((part) => part.type === "text").map((part) => part.text).join("") : "";

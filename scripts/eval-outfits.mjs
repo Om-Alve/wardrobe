@@ -136,6 +136,16 @@ try {
   assert.equal(repicked.status, 201, JSON.stringify(repicked.body));
   assert.match(prompts[2], /L999 is not on the list/, "A pick outside the shortlist is sent back with the reason.");
 
+  const purple = (prompt) => ({ picks: [{ look: candidates(prompt)[0].label, accessories: [], name: "Look", reason: "A purple accent lifts it." }] });
+  queue(plan(CASUAL), purple, purple);
+  const misdescribed = await suggest({ count: 1, occasion: "Errands", selectedItemIds: ["tee", "cargo", "sneakers"] });
+  assert.equal(misdescribed.status, 201, "A reason that names a color the look lacks gets one correction, then the look is kept rather than failing the request.");
+  assert.match(prompts[2], /L1 mentions purple, which is not in the look/, "The correction request names the unsupported color.");
+
+  queue(plan(FORMAL), (prompt) => ({ picks: [{ look: candidates(prompt)[0].label, accessories: [], name: "Dinner", reason: "No dress shoes, so the blue running sneakers stay home." }] }));
+  await suggest({ count: 1, occasion: "Formal dinner" });
+  assert.equal(prompts.length, 2, "Colors of pieces named in a gap are fair to mention.");
+
   queue(planWith(CASUAL, (handleOf) => ({ exclude: [handleOf.get(name("cargo"))] })), pickBy((list) => list.slice(0, 1)));
   const noCargo = await suggest({ count: 1, occasion: "Errands", brief: "Anything but the cargos." });
   assert.equal(noCargo.status, 201, JSON.stringify(noCargo.body));
@@ -170,7 +180,25 @@ try {
   const swaps = JSON.parse(await readFile(path.join(dataDir, "stylist.json"), "utf8")).swaps;
   assert.deepEqual(swaps.map(({ out, in: added }) => [out, added]), [["hoodie", "tee"]], "The swap is recorded as a preference.");
 
-  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, and chosen-clothes Wada reference.");
+  const efforts = [];
+  globalThis.fetch = async (address, options) => {
+    const body = JSON.parse(options.body);
+    efforts.push(body.reasoning_effort ?? null);
+    if (body.reasoning_effort) {
+      return new Response(JSON.stringify({ error: { message: "Unsupported parameter: 'reasoning_effort'." } }), { status: 400, headers: { "Content-Type": "application/json" } });
+    }
+    const prompt = body.messages[0].content;
+    const answer = prompt.startsWith("You are a practical personal stylist planning") ? plan(CASUAL)() : pickBy((list) => list.slice(0, 1))(prompt);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(answer) } }] }), { headers: { "Content-Type": "application/json" } });
+  };
+  const tuned = stylistApi({ env: { WARDROBE_LLM_API_KEY: "eval-key", WARDROBE_DATA_DIR: "data", WARDROBE_REASONING_EFFORT: "none" } });
+  await tuned.configResolved({ root: workspace });
+  tuned.configureServer({ middlewares: { use(value) { handler = value; } } });
+  const fallback = await suggest({ count: 1, occasion: "Errands" });
+  assert.equal(fallback.status, 201, JSON.stringify(fallback.body));
+  assert.deepEqual(efforts, ["none", null, "none", null], "A provider that rejects the reasoning setting gets each request again without it.");
+
+  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, and chosen-clothes Wada reference.");
 } finally {
   globalThis.fetch = realFetch;
   await rm(workspace, { recursive: true, force: true });
