@@ -132,7 +132,11 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
   if (layerChoice.any) layers = layerChoice.fitting;
   else if (plan.outerLayer === "skip") layers = [null];
   else if (plan.outerLayer === "needed" && layerChoice.fitting.length) layers = layerChoice.fitting;
-  else {
+  else if (plan.outerLayer === "needed" && layerChoice.pool.some((item) => miss(item, plan.layerMaxWarmth) === 1)) {
+    // A needed layer a step outside the plan, such as a flannel over smart clothes in the rain, beats no layer at all.
+    layers = layerChoice.pool.filter((item) => miss(item, plan.layerMaxWarmth) === 1);
+    gaps.push(`No outer layer fits ${limits(plan.layerMaxWarmth)} exactly, so looks use the closest: ${names(layers)}.`);
+  } else {
     layers = [null, ...layerChoice.fitting];
     if (plan.outerLayer === "needed") {
       gaps.push(`The conditions call for an outer layer, but none fits ${limits(plan.layerMaxWarmth)}${layerChoice.pool.length ? `; the wardrobe has ${names(layerChoice.pool)}` : ""}.`);
@@ -145,7 +149,12 @@ export function enumerateLooks(items, plan, { anchorId = "", rejectedSets = new 
 
   const shoeChoice = choose("shoes", plan.maxWarmth);
   let shoes = shoeChoice.fitting;
-  if (!shoes.length) {
+  // Shoes one step outside the plan beat no shoes at all; only when every pair is further off do looks leave shoes out.
+  const nearShoes = shoes.length ? [] : (shoeChoice.pool || []).filter((item) => miss(item, plan.maxWarmth) === 1);
+  if (nearShoes.length) {
+    shoes = nearShoes;
+    gaps.push(`No shoes fit ${limits(plan.maxWarmth, plan.shoeFormality)} exactly, so looks use the closest: ${names(nearShoes)}.`);
+  } else if (!shoes.length) {
     shoes = [null];
     if (shoeChoice.pool?.length) {
       gaps.push(`No shoes fit ${limits(plan.maxWarmth, plan.shoeFormality)}, so looks leave shoes out; the wardrobe has ${names(shoeChoice.pool)}.`);
@@ -237,8 +246,16 @@ export function scoreLook(look, feedback) {
   const patterned = attributes.filter((entry) => entry.pattern && !["solid", "textured"].includes(entry.pattern));
   score -= 0.3 * Math.max(0, patterned.length - 2);
   if (patterned.length === 2 && patterned[0].pattern === patterned[1].pattern && patterned[0].patternScale === patterned[1].patternScale) score -= 0.15;
-  const levels = attributes.map((entry) => entry.formality).filter((level) => level !== undefined);
-  if (levels.length) score -= 0.1 * Math.max(0, Math.max(...levels) - Math.min(...levels) - 2);
+  // Formality: pieces more than a step apart read as mismatched, and shoes far from the clothes undo a look (athletic shoes with tailoring).
+  const levels = attributes.filter((entry) => entry.item.part !== "shoes").map((entry) => entry.formality).filter((level) => level !== undefined);
+  if (levels.length) score -= 0.15 * Math.max(0, Math.max(...levels) - Math.min(...levels) - 1);
+  const shoe = attributes.find((entry) => entry.item.part === "shoes");
+  const bottom = attributes.find((entry) => entry.item.part === "lowerbody");
+  const mean = levels.length ? levels.reduce((sum, level) => sum + level, 0) / levels.length : 0;
+  if (shoe && bottom && mean >= 3 && ["brown", "dark brown", "tan", "camel"].includes(colorProfile(shoe.item.color)?.name) && ["black", "charcoal"].includes(colorProfile(bottom.item.color)?.name)) score -= 0.1;
+  if (shoe?.formality !== undefined && levels.length) {
+    score -= 0.15 * Math.max(0, Math.abs(shoe.formality - levels.reduce((sum, level) => sum + level, 0) / levels.length) - 1);
+  }
   const clothing = look.pieces.filter((item) => item.part !== "shoes" && /^#[0-9a-f]{6}$/i.test(item.color || ""));
   for (let i = 0; i < clothing.length; i += 1) for (let j = i + 1; j < clothing.length; j += 1) {
     const distance = deltaE2000(lab(clothing[i].color), lab(clothing[j].color));
@@ -296,14 +313,16 @@ export function buildShortlist(scored, size = SHORTLIST_SIZE) {
   return shuffle(mmrSelect(scored, size)).map((look, index) => ({ ...look, label: `L${index + 1}` }));
 }
 
-export function candidateLine(look, handleOf) {
-  return `${look.label}: ${look.ids.map((id) => handleOf.get(id)).join(" + ")}${look.notes.length ? ` (${look.notes.join("; ")})` : ""}`;
+// Pieces are named in full: with reasoning off, a model reading only handles mixes up which pieces a candidate holds.
+export function candidateLine(look) {
+  return `${look.label}: ${look.pieces.map((piece) => piece.name).join(" + ")}${look.notes.length ? ` (${look.notes.join("; ")})` : ""}`;
 }
 
 // Checks the model's picks against the shortlist it was given.
+// Up to count picks: fewer good looks beat padding with weak ones.
 export function validatePicks(raw, shortlist, accessories, count, { required = [], mentioned = [], checkReasons = false } = {}) {
   const picks = raw?.picks;
-  if (!Array.isArray(picks) || picks.length !== count) throw new Error(`Return exactly ${count} picks in "picks".`);
+  if (!Array.isArray(picks) || picks.length < 1 || picks.length > count) throw new Error(`Return 1 to ${count} picks in "picks".`);
   const byLabel = new Map(shortlist.map((look) => [look.label, look]));
   const labels = picks.map((pick) => pick?.look);
   const unknown = labels.filter((label) => !byLabel.has(label));
@@ -311,7 +330,7 @@ export function validatePicks(raw, shortlist, accessories, count, { required = [
   if (new Set(labels).size !== labels.length) throw new Error("Pick each candidate at most once.");
   const pairs = labels.map((label) => byLabel.get(label).ids.slice(0, 2).join("|"));
   const distinctPairs = new Set(shortlist.map((look) => look.ids.slice(0, 2).join("|"))).size;
-  if (new Set(pairs).size < Math.min(count, distinctPairs)) throw new Error("Choose looks with a different top or bottom from each other; the list has enough of them.");
+  if (new Set(pairs).size < Math.min(picks.length, distinctPairs)) throw new Error("Choose looks with a different top or bottom from each other; the list has enough of them.");
   const misdescribed = [];
   const valid = picks.map((pick) => {
     const extras = pick.accessories === undefined || pick.accessories === null ? [] : pick.accessories;

@@ -14,26 +14,28 @@ export function librarySignature(items) {
   return (hash >>> 0).toString(16);
 }
 
-// Each top and bottom, alone and under each layer, with the shoes closest in formality to the clothes.
-export function allOutfits(items, { profile = {}, hidden = new Set() } = {}) {
+// Each top and bottom, alone and under each layer, with the best-scoring shoes within a step of the clothes' formality.
+export function allOutfits(items, { profile = {}, hidden = new Set(), harmony = () => 0 } = {}) {
   const of = (part) => items.filter((item) => item.part === part);
   const formality = (item) => normalizeAttributes(item.attributes, item.part).formality;
   const shoes = of("shoes");
   const outfits = [];
+  const judge = (pieces) => scoreLook({ ids: pieces.map((piece) => piece.id), pieces }, NEUTRAL_HISTORY).score + profileScore({ pieces }, profile).score + harmony(pieces);
   for (const top of of("upperbody")) for (const bottom of of("lowerbody")) for (const layer of [null, ...of("wholebody_up")]) {
     const clothes = [top, bottom, layer].filter(Boolean);
     const levels = clothes.map(formality).filter((level) => level !== undefined);
     const mean = levels.length ? levels.reduce((sum, level) => sum + level, 0) / levels.length : null;
-    const nearest = shoes.map((shoe) => ({ shoe, gap: mean === null || formality(shoe) === undefined ? 0 : formality(shoe) - mean }))
-      .sort((a, b) => Math.abs(a.gap) - Math.abs(b.gap) || a.shoe.id.localeCompare(b.shoe.id))[0];
-    // Shoes more than two steps from the clothes would undo the outfit, so it is shown without them and says what it needs.
-    const fitting = nearest && Math.abs(nearest.gap) <= 2 ? nearest.shoe : null;
-    const note = nearest && !fitting ? `Needs ${nearest.gap < 0 ? "dressier" : "more casual"} shoes` : "";
-    const pieces = [...clothes, fitting].filter(Boolean);
+    const gap = (shoe) => (mean === null || formality(shoe) === undefined ? 0 : formality(shoe) - mean);
+    // Shoes more than a step from the clothes would undo the outfit; among the rest, the pair that scores best wins, so one loud pair does not land on every look.
+    const fitting = shoes.filter((shoe) => Math.abs(gap(shoe)) <= 1)
+      .map((shoe) => ({ shoe, score: judge([...clothes, shoe]) }))
+      .sort((a, b) => b.score - a.score || a.shoe.id.localeCompare(b.shoe.id))[0];
+    const nearest = [...shoes].sort((a, b) => Math.abs(gap(a)) - Math.abs(gap(b)))[0];
+    const note = shoes.length && !fitting ? `Needs ${gap(nearest) < 0 ? "dressier" : "more casual"} shoes` : "";
+    const pieces = [...clothes, fitting?.shoe].filter(Boolean);
     const ids = pieces.map((piece) => piece.id);
     if (hidden.has(signature(ids))) continue;
-    const look = { ids, pieces };
-    outfits.push({ ids, note, score: Math.round((scoreLook(look, NEUTRAL_HISTORY).score + profileScore(look, profile).score) * 1000) / 1000 });
+    outfits.push({ ids, note, score: Math.round((fitting ? fitting.score : judge(pieces)) * 1000) / 1000 });
   }
   if (outfits.length <= MAX_OUTFITS) return outfits.sort((a, b) => b.score - a.score);
   // Large wardrobes keep the two best versions of each top and bottom pair, then the best overall.

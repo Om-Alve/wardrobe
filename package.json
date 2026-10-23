@@ -18,7 +18,10 @@
     "test:outfits": "node scripts/eval-outfits.mjs",
     "test:import-llm": "node scripts/verify-import-llm.mjs",
     "test:profile": "node scripts/verify-profile.mjs",
-    "eval:live": "node scripts/eval-live-outfits.mjs"
+    "eval:live": "node scripts/eval-live-outfits.mjs",
+    "bench:wardrobe": "node scripts/bench-wardrobe.mjs",
+    "bench:run": "node scripts/bench-run.mjs",
+    "bench:report": "node scripts/bench-report.mjs"
   },
   "dependencies": {
     "@fontsource-variable/instrument-sans": "^5.2.8",

@@ -21,12 +21,12 @@ const REVISE_SHAPE = '{"change":"V1" or null,"pieces":["T1","B1"] or null,"name"
 const PLAN_FIELDS = `- formality: [lowest, highest] on the 1-5 scale (1 athletic, 2 casual, 3 smart casual, 4 dressy or business, 5 formal): the range the occasion calls for, widened only when the user asks for deliberate high-low dressing.
 - shoeFormality: [lowest, highest] for shoes, which can sit apart from the clothes; for example, athletic sneakers (1) suit a day of walking even with casual clothes.
 - maxWarmth: the warmest top, bottoms, or shoes the conditions allow, on the 0-4 scale (0 hot weather only, 1 light, 2 medium, 3 warm, 4 cold-weather outerwear), or null when the weather sets no limit.
-- outerLayer: "needed", "optional", or "skip". When the day swings between cool and warm, dress the base for the warm part and plan a removable layer for the cool part.
+- outerLayer: "needed", "optional", or "skip". Cool or wet weather usually needs one. When the day swings between cool and warm, dress the base for the warm part and plan a removable layer for the cool part.
 - layerMaxWarmth: the warmest outer layer that suits the conditions, 0-4, or null.
 - include: handles of pieces the user explicitly asks to wear, otherwise an empty list.
 - exclude: handles of pieces the user explicitly rules out, otherwise an empty list.`;
 const PLAN_GUIDANCE = `Set one plan for this request from the occasion, the conditions, and the user's request.\n${PLAN_FIELDS}`;
-const STYLING_GUIDANCE = "Each item lists its colors (lightness, temperature, and whether each is a base neutral, earth neutral, or accent), formality from 1 (athletic) to 5 (formal), warmth from 0 (hot weather) to 4 (cold weather), and its fabric, pattern, and fit when known. Build from the bottoms and top first. Let base and earth neutrals carry most of the outfit and use at most two accent colors. When pieces share a color family, step the lightness clearly or vary the texture so they do not read as a near miss. Wear at most one statement piece and at most two patterns, at different scales. Tuck shirts that have tails. Add a bag or watch only when it serves the occasion or was requested; accessories do not define the clothing colors. If the wardrobe lacks a piece the occasion needs, leave that slot out and say what is missing in the reason. A Wada number marks an outfit whose colors follow a combination from Sanzo Wada's Dictionary of Colour Combinations, which is strong evidence they work together. In the reason, describe the actual garment colors and why the pieces work together; do not cite palette numbers or claim colors the outfit does not contain.";
+const STYLING_GUIDANCE = "Each item lists its colors (lightness, temperature, and whether each is a base neutral, earth neutral, or accent), formality from 1 (athletic) to 5 (formal), warmth from 0 (hot weather) to 4 (cold weather), and its fabric, pattern, and fit when known. Build from the bottoms and top first. Let base and earth neutrals carry most of the outfit and use at most two accent colors. When pieces share a color family, step the lightness clearly or vary the texture so they do not read as a near miss. Match sleeves and layers to the temperature: short sleeves suit heat, and cool evenings call for long sleeves or a layer. Wear at most one statement piece and at most two patterns, at different scales. Tuck shirts that have tails. Add a bag or watch only when it serves the occasion or was requested; accessories do not define the clothing colors. If the wardrobe lacks a piece the occasion needs, leave that slot out and say what is missing in the reason. A Wada number marks an outfit whose colors follow a combination from Sanzo Wada's Dictionary of Colour Combinations, which is strong evidence they work together. Write each reason for the wearer in plain words: describe the actual garment colors and why the pieces work together, and do not use item codes, formality or warmth numbers, palette numbers, or terms like base neutral. When a piece is a compromise, such as casual shoes because the wardrobe has no dress shoes, say so plainly instead of presenting it as a strength. Do not claim colors the outfit does not contain.";
 
 function planLine(item, handleOf) {
   const { formality, warmth } = normalizeAttributes(item.attributes, item.part);
@@ -199,10 +199,9 @@ export function stylistApi(options = {}) {
     const profile = await readProfile(path.resolve(root, setting("WARDROBE_DATA_DIR", "data")));
     const wearer = profileSummary(profile);
     const byId = new Map(items.map((item) => [item.id, item]));
-    const everything = allOutfits(items, { profile, hidden: deriveFeedback(state, items).rejectedSets }).map((outfit) => {
+    const everything = allOutfits(items, { profile, hidden: deriveFeedback(state, items).rejectedSets, harmony: (pieces) => colorHarmony(pieces).score }).map((outfit) => {
       const pieces = outfit.ids.map((id) => byId.get(id));
-      const color = colorHarmony(pieces);
-      return { ...outfit, pieces, palette: color.palette, score: outfit.score + color.score };
+      return { ...outfit, pieces, palette: colorHarmony(pieces).palette };
     });
     if (!everything.length) throw bad("Add at least one top and one bottom to build outfits.", 422);
     // A varied, shuffled shortlist, so the stylist judges a broad set without favoring the top of the list.
@@ -214,7 +213,7 @@ export function stylistApi(options = {}) {
     const legend = sorted.filter((item) => item.part !== "accessories_up").map((item) => describeItem(item, handleOf.get(item.id))).join("\n");
     const fewest = Math.min(8, shortlist.length);
     const curated = await askUntilValid({
-      ...llm(), model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
+      ...llm(), reasoningEffort: "", model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
       failure: "The LLM did not return a usable lookbook",
       shape: '{"genres":[{"name":"...","description":"..."}],"outfits":[{"id":"K1","genre":"...","name":"...","why":"..."}]}',
       prompt: `You are a personal stylist curating a lookbook from this wardrobe. The candidates below are outfits its pieces make. A Wada number marks one whose colors follow a combination from Sanzo Wada's Dictionary of Colour Combinations, which is strong evidence its colors work together. Choose the outfits worth wearing, between ${fewest} and 30, judging color harmony, formality, proportion, texture, and variety, and leave out the rest. Group your choices into 3 to 6 genres you name for this wardrobe, ordered from most casual to most formal, each with a one-sentence description. Give each chosen outfit a short name of two to four words and one sentence on why it works that mentions only colors its pieces have. A note that an outfit needs other shoes means the wardrobe lacks suitable shoes, not that the clothes clash.${wearer ? `\n${wearer}` : ""}\n\nWardrobe:\n${legend}\n\nCandidates:\n${shortlist.map(line).join("\n")}`,
@@ -428,16 +427,17 @@ export function stylistApi(options = {}) {
         const used = new Set(shortlist.flatMap((look) => look.ids));
         const legend = sorted.filter((item) => used.has(item.id)).map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
         const accessoryLegend = [...accessories.values()].map((item) => `${describeItem(item, handleOf.get(item.id))}${wornNote(item)}`);
-        const pickPrompt = `You are a practical personal stylist. Choose exactly ${want} looks for this request from the candidates below. Every candidate already fits the plan, the weather, and the selected wardrobe, so judge which combine best for the occasion and the user's request: color, texture, proportion, and variety. Choose looks that differ in top or bottom whenever the candidates allow. Each reason is shown on its own card, so describe only that look's pieces and do not compare it with the other picks. Notes after a candidate come from the user's own history. You may add up to two accessories (A handles) to a look when they serve the occasion or the request${required.length ? `; every look must include ${required.map((item) => handleOf.get(item.id)).join(" and ")}` : ""}. ${gaps.length ? "Mention the relevant gap briefly in the reason. " : ""}${STYLING_GUIDANCE}\n\n${context}\nPlan: ${describePlan(plan)}.${gaps.length ? `\nGaps: ${gaps.join(" ")}` : ""}\n\nPieces:\n${legend.join("\n")}\n\nAccessories:\n${accessoryLegend.join("\n") || "none"}\n\nCandidates:\n${shortlist.map((look) => candidateLine(look, handleOf)).join("\n")}`;
+        const pickPrompt = `You are a practical personal stylist. Choose up to ${want} looks for this request from the candidates below, best first, and return fewer when the rest would be weak for this brief. Every candidate already fits the plan, the weather, and the selected wardrobe, so judge which combine best for the occasion and the user's request: color, texture, proportion, and variety. Choose looks that differ in top or bottom whenever the candidates allow. Each reason is shown on its own card, so describe only that look's pieces and do not compare it with the other picks. Notes after a candidate come from the user's own history. You may add up to two accessories (A handles) to a look when they serve the occasion or the request${required.length ? `; every look must include ${required.map((item) => handleOf.get(item.id)).join(" and ")}` : ""}. ${gaps.length ? "Mention the relevant gap briefly in the reason. " : ""}${STYLING_GUIDANCE}\n\n${context}\nPlan: ${describePlan(plan)}.${gaps.length ? `\nGaps: ${gaps.join(" ")}` : ""}\n\nPieces:\n${legend.join("\n")}\n\nAccessories:\n${accessoryLegend.join("\n") || "none"}\n\nCandidates:\n${shortlist.map((look) => candidateLine(look)).join("\n")}`;
 
         emit("model");
         const picks = await askUntilValid({
           ...llm(), model, signal, onProgress: streaming ? emit : undefined, onRetry: () => emit("retrying"),
-          shape: `{"picks":[{"look":"L1","accessories":["A1"],"name":"...","reason":"..."}]} with exactly ${want} picks`,
+          shape: `{"picks":[{"look":"L1","accessories":["A1"],"name":"...","reason":"..."}]} with 1 to ${want} picks, best first`,
           failure: "The LLM did not return usable looks", prompt: pickPrompt,
           check: (raw, attempt) => { emit("checking"); return validatePicks(raw, shortlist, accessories, want, { required, mentioned, checkReasons: attempt === 0 }); },
         });
-        const ideas = picks.map((pick) => validateLook({ name: pick.name, reason: pick.reason, occasion: occasion || "everyday", garmentIds: pick.garmentIds }, available));
+        const named = (text) => String(text || "").replace(/\b[TBOSA]\d+\b/g, (handle) => itemOf.get(handle)?.name || handle);
+        const ideas = picks.map((pick) => validateLook({ name: named(pick.name), reason: named(pick.reason), occasion: occasion || "everyday", garmentIds: pick.garmentIds }, available));
         const now = new Date().toISOString();
         const looks = ideas.map((idea) => ({
           ...idea, plan, gaps, gapNotes, id: randomUUID(), tripId: trip?.id || null, anchorId: anchorId || null, verdict: null,
@@ -626,7 +626,8 @@ export function stylistApi(options = {}) {
               if (unknown.length) throw new Error(`Use listed handles only; ${unknown.join(", ")} is not listed.`);
               ids = raw.pieces.map((handle) => itemOf.get(handle).id);
             }
-            const look = validateLook({ name: raw.name, reason: raw.reason, occasion: current.occasion, garmentIds: ids }, available);
+            const named = (text) => String(text || "").replace(/\b[TBOSAV]\d+\b/g, (handle) => itemOf.get(handle)?.name || handle);
+            const look = validateLook({ name: named(raw.name), reason: named(raw.reason), occasion: current.occasion, garmentIds: ids }, available);
             if (current.anchorId && !look.garmentIds.includes(current.anchorId)) throw new Error("Keep the anchor piece in the look.");
             const pieces = [...new Set([...look.garmentIds, ...current.garmentIds])].map((id) => available.find((item) => item.id === id)).filter(Boolean);
             const claimed = unsupportedColors(look.reason, pieces);

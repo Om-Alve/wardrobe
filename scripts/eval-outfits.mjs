@@ -59,11 +59,8 @@ function handles(prompt) {
   return new Map([...prompt.matchAll(/^([TBOSA]\d+) \| [^|]+ \| ([^|]+?) \|/gm)].map((match) => [match[2], match[1]]));
 }
 function candidates(prompt) {
-  const names = new Map([...handles(prompt)].map(([itemName, handle]) => [handle, itemName]));
   const section = prompt.split("\nCandidates:\n")[1]?.split("\n\n")[0] || "";
-  return [...section.matchAll(/^(L\d+): ([^(\n]+?)(?: \((.*)\))?$/gm)].map((match) => ({
-    label: match[1], names: match[2].split(" + ").map((handle) => names.get(handle)), notes: match[3] || "",
-  }));
+  return [...section.matchAll(/^(L\d+): ([^(\n]+?)(?: \((.*)\))?$/gm)].map((match) => ({ label: match[1], names: match[2].split(" + "), notes: match[3] || "" }));
 }
 const plan = (value) => () => ({ plan: value });
 const planWith = (value, change) => (prompt) => ({ plan: { ...value, ...change(handles(prompt)) } });
@@ -129,6 +126,12 @@ try {
   const malformed = await suggest({ count: 1, occasion: "Errands" });
   assert.equal(malformed.status, 201, "A malformed answer gets one more ask instead of failing the request.");
   assert.match(prompts[2], /It was not valid JSON/);
+
+  queue(plan(CASUAL), pickBy((list) => list.slice(0, 1)));
+  const single = await suggest({ count: 3, occasion: "Errands" });
+  assert.equal(single.status, 201, JSON.stringify(single.body));
+  assert.equal(single.body.length, 1, "When only one candidate is genuinely good, the stylist returns one look rather than padding with weak ones.");
+  assert.equal(prompts.length, 2, "Returning fewer looks than asked is not treated as an error.");
 
   queue(plan(CASUAL), () => ({ picks: [{ look: "L999", name: "Missing", reason: "Not listed." }] }), pickBy((list) => list.slice(0, 1)));
   const repicked = await suggest({ count: 1, occasion: "Errands" });
@@ -375,7 +378,7 @@ try {
   assert.equal(fallback.status, 201, JSON.stringify(fallback.body));
   assert.deepEqual(efforts, ["none", null, "none", null], "A provider that rejects the reasoning setting gets each request again without it.");
 
-  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, warmth and layer plan, distinct bottoms, plan and pick retries, malformed-answer retry, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, what-to-buy order with alternatives, owned twins, and counted reasons, pieces that only work together, anchor over plan includes, stale revisions, re-offered turned-down looks, non-color words, a very large wardrobe, the curated lookbook with genres, checked reasons, staleness, saving, hiding, and wears, and Wada dictionary matches.");
+  console.log("Outfit evals passed: plan filtering with gaps, shoe range and its allowance, fewer looks instead of padding, a single strong pick, warmth and layer plan, distinct bottoms, plan and pick retries, malformed-answer retry, brief exclusions, thumbs-down exclusion, worn-today notes, undoing a wear, single-swap revision, reasoning setting fallback, color claims in reasons, wearer profile in prompts and ranking, what-to-buy order with alternatives, owned twins, and counted reasons, pieces that only work together, anchor over plan includes, stale revisions, re-offered turned-down looks, non-color words, a very large wardrobe, the curated lookbook with genres, checked reasons, staleness, saving, hiding, and wears, and Wada dictionary matches.");
 } finally {
   globalThis.fetch = realFetch;
   await rm(workspace, { recursive: true, force: true });
