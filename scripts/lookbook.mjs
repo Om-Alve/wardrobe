@@ -14,7 +14,7 @@ export function librarySignature(items) {
   return (hash >>> 0).toString(16);
 }
 
-// Each top and bottom, alone and under each layer, with the best-scoring shoes within a step of the clothes' formality.
+// Each top and bottom, alone and under each layer, with the best-scoring shoes within a step and a half of the clothes' formality.
 export function allOutfits(items, { profile = {}, hidden = new Set(), harmony = () => 0 } = {}) {
   const of = (part) => items.filter((item) => item.part === part);
   const formality = (item) => normalizeAttributes(item.attributes, item.part).formality;
@@ -26,8 +26,9 @@ export function allOutfits(items, { profile = {}, hidden = new Set(), harmony = 
     const levels = clothes.map(formality).filter((level) => level !== undefined);
     const mean = levels.length ? levels.reduce((sum, level) => sum + level, 0) / levels.length : null;
     const gap = (shoe) => (mean === null || formality(shoe) === undefined ? 0 : formality(shoe) - mean);
-    // Shoes more than a step from the clothes would undo the outfit; among the rest, the pair that scores best wins, so one loud pair does not land on every look.
-    const fitting = shoes.filter((shoe) => Math.abs(gap(shoe)) <= 1)
+    // Shoes further than that undo the outfit (runners under a dress shirt) while runners with a tee and trousers stay fine;
+    // among the shoes that fit, the pair that scores best wins, so one loud pair does not land on every look.
+    const fitting = shoes.filter((shoe) => Math.abs(gap(shoe)) <= 1.5)
       .map((shoe) => ({ shoe, score: judge([...clothes, shoe]) }))
       .sort((a, b) => b.score - a.score || a.shoe.id.localeCompare(b.shoe.id))[0];
     const nearest = [...shoes].sort((a, b) => Math.abs(gap(a)) - Math.abs(gap(b)))[0];

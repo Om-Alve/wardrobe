@@ -68,6 +68,15 @@ export function eligibleItems(trip, library) {
   return library.filter((item) => ["packed", "worn"].includes(trip.items?.[item.id]));
 }
 
+// Long reasons end at the last full sentence that fits rather than mid-word.
+function clip(text, limit) {
+  const value = String(text || "").trim();
+  if (value.length <= limit) return value;
+  const cut = value.slice(0, limit);
+  const end = cut.search(/[.!?](?=[^.!?]*$)/);
+  return end > limit / 2 ? cut.slice(0, end + 1) : `${cut.replace(/\s+\S*$/, "")}…`;
+}
+
 export function validateLook(value, availableItems) {
   const byId = new Map(availableItems.map((item) => [item.id, item]));
   const ids = value?.garmentIds;
@@ -84,7 +93,7 @@ export function validateLook(value, availableItems) {
   const palette = wadaMatch(garments);
   return {
     name: String(value.name || "New look").trim().slice(0, 80) || "New look",
-    reason: String(value.reason || "").trim().slice(0, 500),
+    reason: clip(value.reason, 500),
     occasion: String(value.occasion || "").trim().slice(0, 80),
     garmentIds: ids,
     palette: palette ? { id: palette.id, colors: palette.colors } : null,
