@@ -253,6 +253,7 @@ export function Stylist({ items, view, onNavigate }) {
     if (savedScope !== "all" && savedScope !== "wardrobe" && !state.looks.some((look) => look.savedAt && look.tripId === savedScope)) setSavedScope("all");
     if (savedScope === "wardrobe" && !state.looks.some((look) => look.savedAt && !look.tripId)) setSavedScope("all");
   }, [savedScope, state.looks]);
+  useEffect(() => { setNotice(""); setError(""); }, [view]);
   useEffect(() => {
     if (!state.looks.some((look) => look.status === "generating")) return undefined;
     const timer = window.setInterval(() => refresh().catch(() => {}), 2500);

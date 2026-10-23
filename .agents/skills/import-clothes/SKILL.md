@@ -166,6 +166,12 @@ node .agents/skills/import-clothes/scripts/import-to-wardrobe.mjs \
 
 The script validates the cutouts and modeled PNGs, copies them into `data/imported/`, and atomically updates `data/library.json`. It derives stable UUIDs from cutout content, so rerunning an identical import updates metadata and modeled photos without creating duplicates.
 
+The outfit planner needs each garment's type, formality, warmth, fabric, pattern, and fit. When `.env` configures an LLM, describe the new pieces with the same vision model the in-app importer uses; it skips garments that already have attributes:
+
+```bash
+npm run describe:garments:apply
+```
+
 Restart the dev server only if the running app does not pick up the database change, then verify the new item count at `/api/import/wardrobe` and visually inspect the gallery.
 
 For cutout-only delivery, create the requested new child folder under the repository root and copy only accepted PNGs into it. Do not write the database.
