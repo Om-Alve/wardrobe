@@ -7,12 +7,6 @@ This is a fork of [Thijs's Wardrobe](https://github.com/tandpfun/wardrobe). The 
 
 [Thijs's original post](https://x.com/cdngdev/status/2076812846793650485)
 
-## Demo
-
-[![Watch the Wardrobe demo](docs/wardrobe-demo-poster.jpg)](docs/wardrobe-demo.mp4)
-
-[Watch the 2½-minute demo](docs/wardrobe-demo.mp4). This silent public copy shows a camera-roll import, the planner, modeled outfits, trip packing, purchase suggestions, and the lookbook. It obscures people and local paths.
-
 ## What this fork adds
 
 - **Outfit planner:** Describe an occasion, weather, and a preferred piece. The app builds suitable combinations from your clothes, then asks the chat model to choose and explain a varied set.
@@ -96,7 +90,7 @@ To add attributes to older imports, run `npm run describe:garments` to preview, 
 
 Run `npm run check` to build the app and exercise the trip, outfit, import, and profile APIs with local fixtures. Its image API call is mocked, so the check does not need an API key. `npm run eval:live` runs fixed outfit briefs against your configured model on a copy of the wardrobe and writes a report to `data/evals/`. It uses your model quota.
 
-The [demo video script](demo/script.md) describes the recording and editing tools in `demo/`. Work files and full-resolution renders go in the ignored `demo/out/` directory. The smaller README copy is in `docs/wardrobe-demo.mp4`.
+The [demo video script](demo/script.md) describes the recording and editing tools in `demo/`. Recordings and renders go in the ignored `demo/out/` directory.
 
 ## Credits and license
 

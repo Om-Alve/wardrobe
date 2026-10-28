@@ -1,6 +1,6 @@
 # Wardrobe demo video
 
-About 2½ minutes at 1920×1080. Every shot fills whole bars, and clicks and results land on beats. Everything is recorded from the real app and the real Codex CLI. The public README copy is silent and obscures faces, the camera roll, and local paths.
+About 2½ minutes at 1920×1080. Every shot fills whole bars, and clicks and results land on beats. Everything is recorded from the real app and the real Codex CLI. The render stays local in `demo/out/`; review faces, camera-roll images, local paths, and soundtrack rights before publishing it.
 
 ## Shots
 
