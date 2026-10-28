@@ -1,6 +1,6 @@
 # Wardrobe demo video
 
-About 2½ minutes at 1920×1080, cut to "Color Your Night" (95.7 BPM). Every shot fills whole bars, and clicks and results land on beats. Everything is recorded from the real app and the real Codex CLI, using your own wardrobe, photos and camera roll.
+About 2½ minutes at 1920×1080. Every shot fills whole bars, and clicks and results land on beats. Everything is recorded from the real app and the real Codex CLI. The public README copy is silent and obscures faces, the camera roll, and local paths.
 
 ## Shots
 
@@ -15,7 +15,7 @@ About 2½ minutes at 1920×1080, cut to "Color Your Night" (95.7 BPM). Every sho
 | 32–36 | 1:21 | See how it looks: a photo of you in the saved look | See any look on you before you wear it |
 | 36–43 | 1:31 | A Lisbon trip: packing list, forecast, then ideas from the packed pieces | Trips get a packing list and a forecast / and their outfit ideas use only what you packed |
 | 43–48 | 1:49 | What to buy next, with an occasion added | What to buy next counts the outfits each piece would add |
-| 48–56 | 2:02 | The lookbook arrives with the song's return: genres, Wada swatches, save, Saved | The lookbook collects your best outfits, grouped by style / and checks their colors against Sanzo Wada's colour dictionary |
+| 48–56 | 2:02 | The lookbook: genres, Wada swatches, save, Saved | The lookbook collects your best outfits, grouped by style / and checks their colors against Sanzo Wada's colour dictionary |
 | 56–58 | 2:22 | End card | |
 
 ## How it's made
@@ -25,7 +25,7 @@ About 2½ minutes at 1920×1080, cut to "Color Your Night" (95.7 BPM). Every sho
   - The pasted command and prompt are revealed keystroke by keystroke.
   - The run is compressed into a few seconds.
 - **Recording.** `demo/record.mjs` drives the app with agent-browser and records Chrome's own screencast at 60 fps. It logs every pointer move, click and named moment on the frames' clock.
-- **Editing.** `demo/edit.mjs` builds a Cap project with one segment per scene:
+- **Editing.** `demo/edit.mjs` builds a Cap project with one segment per scene. It exports without audio unless you pass `--song` with a track you can publish:
   - **Cursor.** A cursor track is drawn from the logged clicks.
   - **Timing.** Named moments are placed on half-beats, and model waits are cut on a beat.
   - **Overlays.** Captions sit below the app, and zooms only come in when no caption is showing.

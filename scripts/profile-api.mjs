@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { chatJson, llmSettings, visionModel } from "./llm-client.mjs";
+import { chatJson, llmSettings } from "./llm-client.mjs";
 import { normalizeProfile, normalizeSuggestion, profileExtractionPrompt } from "./profile.mjs";
 
 const BASE = "/api/profile";
@@ -85,7 +85,7 @@ export function profileApi(options = {}) {
           .toColorspace("srgb").jpeg({ quality: 90 }).toBuffer();
         let raw;
         // Reading the photo is a one-time call, so it keeps the model's default reasoning rather than the stylist's setting.
-        try { raw = await chatJson({ ...llm(), reasoningEffort: "", model: visionModel(setting), prompt: profileExtractionPrompt(), image, mime: "image/jpeg", timeout: 180000 }); }
+        try { raw = await chatJson({ ...llm(), reasoningEffort: "", prompt: profileExtractionPrompt(), image, mime: "image/jpeg", timeout: 180000 }); }
         catch (error) { throw bad(`The LLM could not read the photo: ${error.message}`, 502); }
         return send(res, 200, normalizeSuggestion(raw));
       }

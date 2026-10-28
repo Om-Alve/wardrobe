@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fieldsForPart, PART_LABELS } from "./garment-attributes.mjs";
 import { describeGarment } from "./import-job-api.mjs";
-import { llmSettings, visionModel } from "./llm-client.mjs";
+import { llmSettings } from "./llm-client.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 if (existsSync(path.join(root, ".env"))) process.loadEnvFile(path.join(root, ".env"));
@@ -27,10 +27,9 @@ if (args.includes("--help")) {
 const setting = (name, fallback = "") => process.env[name] || fallback;
 const llm = llmSettings(setting);
 if (!llm.configured) throw new Error("Configure WARDROBE_LLM_API_KEY or WARDROBE_LLM_BASE_URL in .env first.");
-const model = visionModel(setting);
 const library = JSON.parse(await readFile(libraryFile, "utf8"));
 const pending = library.filter((item) => item.attributesSource !== "user" && (everything || !Object.keys(item.attributes || {}).length));
-console.log(`Describing ${pending.length} of ${library.length} garments with ${model}${apply ? "" : " (preview; pass --apply to save)"}.\n`);
+console.log(`Describing ${pending.length} of ${library.length} garments with ${llm.model}${apply ? "" : " (preview; pass --apply to save)"}.\n`);
 
 const results = new Map();
 const failures = [];
@@ -40,7 +39,7 @@ await Promise.all(Array.from({ length: Math.min(4, pending.length) }, async () =
     const item = pending[next++];
     try {
       const image = await readFile(path.join(dataDir, "imported", path.basename(new URL(item.image, "http://localhost").pathname)));
-      results.set(item.id, await describeGarment({ ...llm, model, image, item }));
+      results.set(item.id, await describeGarment({ ...llm, image, item }));
     } catch (error) {
       failures.push(`${item.name}: ${error.message}`);
     }

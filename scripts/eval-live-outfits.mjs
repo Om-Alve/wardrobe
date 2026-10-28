@@ -95,7 +95,7 @@ try {
   }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const report = [`# Live outfit eval, ${new Date().toISOString()}`, "", `Model: ${process.env.WARDROBE_STYLIST_MODEL || process.env.WARDROBE_LLM_MODEL}. Wardrobe: ${library.length} items, ${library.filter((item) => Object.keys(item.attributes || {}).length).length} described. Profile: ${existsSync(path.join(workspace, "data", "profile.json")) ? "yes" : "none"}.`, ""];
+  const report = [`# Live outfit eval, ${new Date().toISOString()}`, "", `Model: ${process.env.WARDROBE_LLM_MODEL || "gpt-6-luna"}. Wardrobe: ${library.length} items, ${library.filter((item) => Object.keys(item.attributes || {}).length).length} described. Profile: ${existsSync(path.join(workspace, "data", "profile.json")) ? "yes" : "none"}.`, ""];
   for (const result of results) {
     const { brief } = result;
     report.push(`## ${brief.occasion}${brief.conditions ? ` (${brief.conditions})` : ""}`, "");

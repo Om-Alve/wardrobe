@@ -3,7 +3,7 @@ import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 
 import path from "node:path";
 import sharp from "sharp";
 import { attributePrompt, normalizeAttributes } from "./garment-attributes.mjs";
-import { chatJson, imageSettings, llmSettings, visionModel } from "./llm-client.mjs";
+import { chatJson, imageSettings, llmSettings } from "./llm-client.mjs";
 
 const API_ROOT = "/api/import/jobs";
 const ASSET_ROOT = "/api/import/assets";
@@ -446,7 +446,7 @@ export function wardrobeImportApi(options = {}) {
   async function describeAccepted(jobId, bytes) {
     const job = await loadJob(jobId);
     if (!job) return;
-    const attributes = await describeGarment({ ...llm(), model: visionModel(setting), image: bytes, item: job.metadata })
+    const attributes = await describeGarment({ ...llm(), image: bytes, item: job.metadata })
       .catch((error) => { console.warn(`Could not describe ${job.metadata.name}: ${error.message}`); return null; });
     if (!attributes || !Object.keys(attributes).length) return;
     const latest = await loadJob(jobId);
@@ -487,7 +487,7 @@ export function wardrobeImportApi(options = {}) {
           await writeFile(path.join(dir, rawName), bytes);
           failedAssetUrl = `${ASSET_ROOT}/${current.id}/${rawName}`;
           bytes = await removeChromaBackground(bytes, chromaKeyUsed);
-          attributes = await describeGarment({ ...llm(), model: visionModel(setting), image: bytes, item: current.metadata })
+          attributes = await describeGarment({ ...llm(), image: bytes, item: current.metadata })
             .catch((error) => { console.warn(`Could not describe ${current.metadata.name}: ${error.message}`); return null; });
         } else {
           const garmentName = current.stages.garment.assetUrl
@@ -604,7 +604,7 @@ export function wardrobeImportApi(options = {}) {
         const input = await body(req);
         const image = decodeImage(input);
         const normalizedImage = await normalizeImage(image.data);
-        const detected = (await openAIAnalyze({ ...llm(), model: visionModel(setting), image: normalizedImage, mime: "image/png" })).map(normalizeMetadata);
+        const detected = (await openAIAnalyze({ ...llm(), image: normalizedImage, mime: "image/png" })).map(normalizeMetadata);
         const jobs = [];
         for (const metadata of detected) {
           const id = randomUUID();

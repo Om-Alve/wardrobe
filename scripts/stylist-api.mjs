@@ -213,7 +213,7 @@ export function stylistApi(options = {}) {
     const legend = sorted.filter((item) => item.part !== "accessories_up").map((item) => describeItem(item, handleOf.get(item.id))).join("\n");
     const fewest = Math.min(8, shortlist.length);
     const curated = await askUntilValid({
-      ...llm(), reasoningEffort: "", model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
+      ...llm(), reasoningEffort: "",
       failure: "The LLM did not return a usable lookbook",
       shape: '{"genres":[{"name":"...","description":"..."}],"outfits":[{"id":"K1","genre":"...","name":"...","why":"..."}]}',
       prompt: `You are a personal stylist curating a lookbook from this wardrobe. The candidates below are outfits its pieces make. A Wada number marks one whose colors follow a combination from Sanzo Wada's Dictionary of Colour Combinations, which is strong evidence its colors work together. Choose the outfits worth wearing, between ${fewest} and 30, judging color harmony, formality, proportion, texture, and variety, and leave out the rest. Group your choices into 3 to 6 genres you name for this wardrobe, ordered from most casual to most formal, each with a one-sentence description. Give each chosen outfit a short name of two to four words and one sentence on why it works that mentions only colors its pieces have. A note that an outfit needs other shoes means the wardrobe lacks suitable shoes, not that the clothes clash.${wearer ? `\n${wearer}` : ""}\n\nWardrobe:\n${legend}\n\nCandidates:\n${shortlist.map(line).join("\n")}`,
@@ -379,7 +379,6 @@ export function stylistApi(options = {}) {
         }
         const occasion = field(body.occasion, 100);
         const brief = field(body.brief, 600);
-        const model = setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini")));
         const signal = AbortSignal.any([AbortSignal.timeout(300000), disconnected.signal]);
         const { handleOf, itemOf, sorted } = assignHandles(available);
         const wornNote = (item) => trip?.items[item.id] === "worn" ? " | worn on this trip; use only if needed" : "";
@@ -394,7 +393,7 @@ export function stylistApi(options = {}) {
         emit("plan");
         const planLines = sorted.map((item) => planLine(item, handleOf));
         const plan = await askUntilValid({
-          ...llm(), model, signal, shape: PLAN_SHAPE, failure: "The LLM did not return a usable plan", onRetry: () => emit("retrying"),
+          ...llm(), signal, shape: PLAN_SHAPE, failure: "The LLM did not return a usable plan", onRetry: () => emit("retrying"),
           prompt: `You are a practical personal stylist planning outfits. ${PLAN_GUIDANCE}\n\n${context}\n\nItems:\n${planLines.join("\n")}`,
           check: (raw) => validatePlan(raw.plan, itemOf),
         });
@@ -431,7 +430,7 @@ export function stylistApi(options = {}) {
 
         emit("model");
         const picks = await askUntilValid({
-          ...llm(), model, signal, onProgress: streaming ? emit : undefined, onRetry: () => emit("retrying"),
+          ...llm(), signal, onProgress: streaming ? emit : undefined, onRetry: () => emit("retrying"),
           shape: `{"picks":[{"look":"L1","accessories":["A1"],"name":"...","reason":"..."}]} with 1 to ${want} picks, best first`,
           failure: "The LLM did not return usable looks", prompt: pickPrompt,
           check: (raw, attempt) => { emit("checking"); return validatePicks(raw, shortlist, accessories, want, { required, mentioned, checkReasons: attempt === 0 }); },
@@ -527,10 +526,9 @@ export function stylistApi(options = {}) {
         const history = historyOccasions((await load()).looks);
         const profile = await readProfile(path.resolve(root, setting("WARDROBE_DATA_DIR", "data")));
         const wearer = profileSummary(profile);
-        const model = setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini")));
         const { handleOf, itemOf, sorted } = assignHandles(items);
         const plans = await askUntilValid({
-          ...llm(), model, failure: "The LLM did not return usable plans",
+          ...llm(), failure: "The LLM did not return usable plans",
           shape: `{"plans":[{"occasion":"...","plan":${PLAN_OBJECT}}]} with one entry per occasion, in the order listed`,
           prompt: `You are a practical personal stylist reviewing a wardrobe. For each occasion below, set the plan you would use when dressing for it, assuming typical weather unless the occasion names the conditions. Each plan has these fields:\n${PLAN_FIELDS}${wearer ? `\n${wearer}` : ""}\n\nOccasions:\n${names.map((name, index) => `${index + 1}. ${name}`).join("\n")}\n\nItems:\n${sorted.map((item) => planLine(item, handleOf)).join("\n")}`,
           check: (raw) => {
@@ -541,7 +539,7 @@ export function stylistApi(options = {}) {
         const occasions = names.map((name, index) => ({ name, weight: history.get(name) || 1, plan: plans[index] }));
         const coverage = wardrobeCoverage(items, occasions, profile);
         const candidates = await askUntilValid({
-          ...llm(), model, failure: "The LLM did not suggest usable pieces",
+          ...llm(), failure: "The LLM did not suggest usable pieces",
           shape: '{"candidates":[{"name":"...","part":"upperbody|lowerbody|wholebody_up|shoes","color":"#rrggbb","attributes":{"category":"...","formality":<1-5>,"warmth":<0-4>},"why":"..."}]}',
           prompt: `You are a practical personal stylist reviewing this wardrobe for its next purchase. Propose 8 different pieces the wearer could buy that would add the most new complete outfits across the occasions below. A complete outfit is a top and bottoms worn with shoes, plus an outer layer when the occasion needs one, all fitting that occasion's plan. Favor pieces that close the listed gaps and combine with many existing pieces, and avoid near-duplicates of what the wardrobe already has. Propose only tops, bottoms, outer layers, or shoes: specific, widely available pieces, each in one main color.${wearer ? ` ${wearer}` : ""}\n\nOccasions:\n${coverage.map((entry, index) => `- ${entry.occasion}: plan ${describePlan(occasions[index].plan)}; complete outfits now: ${entry.outfits}${entry.gaps.length ? `; gaps: ${entry.gaps.join(" ")}` : ""}`).join("\n")}\n\nWardrobe:\n${sorted.map((item) => describeItem(item, handleOf.get(item.id))).join("\n")}\n\nGive each piece its attributes with these keys and options; formality runs from 1 (athletic) to 5 (formal) and warmth from 0 (hot weather) to 4 (cold weather):\n${attributeOptions()}\nIn "why", say in one sentence which occasions and existing pieces it works with.`,
           check: (raw) => {
@@ -612,7 +610,7 @@ export function stylistApi(options = {}) {
         const options = singleChanges(current.garmentIds, available, handleOf, { anchorId: current.anchorId });
         const prompt = `Revise this look for the user's latest request. Prefer the smallest change that answers it: when one of the single changes below does, return its label as "change" and set "pieces" to null. Only when the request needs more than one change, set "change" to null and give the complete look as "pieces": one top and one bottom, plus at most one outer layer, one pair of shoes, and two accessories. ${current.anchorId ? `Keep ${handleOf.get(current.anchorId)} in the look. ` : ""}${STYLING_GUIDANCE}\nCurrent look: ${current.garmentIds.map((id) => handleOf.get(id)).filter(Boolean).join(" + ")}; ${current.name}: ${current.reason}\nConversation: ${JSON.stringify(current.messages.slice(-8))}\nLatest request: ${message}\nOccasion: ${current.occasion || "everyday"}\nWeather: ${current.weather || "not supplied"}${wearer ? `\n${wearer}` : ""}\n\nPieces:\n${sorted.map((item) => describeItem(item, handleOf.get(item.id))).join("\n")}\n\nSingle changes:\n${options.map((option) => `${option.label}: ${option.text}`).join("\n") || "none"}`;
         const idea = await askUntilValid({
-          ...llm(), model: setting("WARDROBE_STYLIST_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_STYLIST_MODEL", "gpt-5.4-mini"))),
+          ...llm(),
           prompt, shape: REVISE_SHAPE, failure: "The LLM returned an invalid revision",
           check: (raw, attempt) => {
             let ids;

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Cuts the recorded scenes to the song in a Cap project and exports it.
+// Cuts the recorded scenes to the beat timeline in a Cap project and exports it.
 // Each shot fills whole bars. Named moments in a recording (a click, results arriving) land on half-beats:
 // a few are pinned by hand, the rest are spread at an even pace between them. Waits for the model are cut
 // on a beat. Captions and zooms are anchored to beats or to those moments, so everything moves with the music.
-// Usage: node demo/edit.mjs [--scenes dir] [--only planner,trip] [--no-export]
+// Usage: node demo/edit.mjs [--scenes dir] [--only planner,trip] [--song licensed-track.mp3] [--no-export]
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,8 @@ const args = process.argv.slice(2);
 const option = (name, fallback) => { const index = args.indexOf(`--${name}`); return index === -1 ? fallback : args[index + 1]; };
 const out = fileURLToPath(new URL("./out/", import.meta.url));
 const scenesDir = path.resolve(option("scenes", path.join(out, "scenes")));
-const song = path.resolve(option("song", path.join(process.env.HOME, "Downloads", "Color Your Night.mp3")));
+const songFile = option("song", "");
+const song = songFile ? path.resolve(songFile) : null;
 const project = path.resolve(option("project", path.join(out, "wardrobe-demo.cap")));
 const output = path.resolve(option("output", path.join(out, "wardrobe-demo.mp4")));
 const only = option("only", "")?.split(",").filter(Boolean);
@@ -157,7 +158,7 @@ config.background = { ...config.background, source: { type: "gradient", from: [2
 config.cursor = { ...config.cursor, hide: false, size: 150, type: "auto", animationStyle: "mellow", hideWhenIdle: false, motionBlur: 0.5, useSvg: true };
 config.timeline = {
   segments, zoomSegments, textSegments, sceneSegments: [], maskSegments: [], captionSegments: [], keyboardSegments: [],
-  audioSegments: [{ start: 0, end: total, track: 0, path: song, name: "Color Your Night", enabled: true, trimStart: songOffset, volumeDb: -2, fadeIn: 0, fadeOut: 2.5, duration: 227.25 }],
+  audioSegments: song ? [{ start: 0, end: total, track: 0, path: song, name: path.basename(song), enabled: true, trimStart: songOffset, volumeDb: -2, fadeIn: 0, fadeOut: 2.5, duration: total + songOffset }] : [],
 };
 await setConfig(project, config);
 console.log(report.join("\n"));

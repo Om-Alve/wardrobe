@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { describeGarment } from "./import-job-api.mjs";
-import { llmSettings, visionModel } from "./llm-client.mjs";
+import { llmSettings } from "./llm-client.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 if (existsSync(path.join(root, ".env"))) process.loadEnvFile(path.join(root, ".env"));
@@ -126,7 +126,7 @@ const items = await pool(chosen, 6, async ({ row, part, type, share }) => {
   };
   if (!described[item.id]) {
     try {
-      described[item.id] = await describeGarment({ ...llm, model: visionModel(setting), image: await readFile(path.join(images, `${item.id}.png`)), item });
+      described[item.id] = await describeGarment({ ...llm, image: await readFile(path.join(images, `${item.id}.png`)), item });
     } catch (error) { console.warn(`Could not describe ${item.name}: ${error.message}`); }
   }
   return { ...item, attributes: described[item.id] || {}, attributesSource: described[item.id] ? "model" : null };

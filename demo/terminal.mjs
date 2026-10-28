@@ -69,10 +69,11 @@ const keystrokes = (data) => data.match(/\x1b\[[0-9;?<>=]*[A-Za-z~]|\x1b\][^\x07
 const output = [];
 for (const [index, event] of events.entries()) {
   if (event.t > anchors.at(-1)[0]) continue;
+  const screen = event.data.replaceAll(process.env.HOME, "~");
   // Whatever was on screen before the clip starts is drawn in its first frame.
-  if (event.t < anchors[0][0]) { output.push([0, event.data]); continue; }
+  if (event.t < anchors[0][0]) { output.push([0, screen]); continue; }
   if (index === command || index === prompt) {
-    const pieces = keystrokes(event.data);
+    const pieces = keystrokes(screen);
     const visible = pieces.filter((piece) => !piece.startsWith("\x1b")).length;
     const span = index === command ? typeCommand : typePrompt;
     const start = index === command ? map(event.t) - typeCommand : map(event.t) + 0.005;
@@ -88,7 +89,7 @@ for (const [index, event] of events.entries()) {
     if (chunk) output.push([start + span, chunk]);
     continue;
   }
-  output.push([map(event.t), event.data]);
+  output.push([map(event.t), screen]);
 }
 output.sort((a, b) => a[0] - b[0]);
 // An empty last frame makes the player's duration include the final hold.

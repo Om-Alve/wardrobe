@@ -12,16 +12,14 @@ export default defineConfig(({ mode }) => {
       include: ["react", "react-dom/client"],
     },
     server: {
-      host: "0.0.0.0",
-      allowedHosts: ["terminal.local"],
+      host: "localhost",
       warmup: {
         clientFiles: ["./src/main.jsx"],
       },
     },
     preview: {
-      host: "0.0.0.0",
+      host: "localhost",
       port: 4173,
-      allowedHosts: ["localhost"],
     },
     plugins: [react(), responsiveImageApi(), wardrobeImportApi({ env }), stylistApi({ env }), profileApi({ env })],
   };

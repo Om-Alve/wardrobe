@@ -4,12 +4,9 @@ export function llmSettings(setting) {
     key: setting("WARDROBE_LLM_API_KEY") || (customBase ? "" : setting("OPENAI_API_KEY")),
     baseUrl: (customBase || setting("OPENAI_API_BASE_URL", "https://api.openai.com/v1")).replace(/\/$/, ""),
     configured: Boolean(setting("WARDROBE_LLM_API_KEY") || customBase || setting("OPENAI_API_KEY")),
+    model: setting("WARDROBE_LLM_MODEL", "gpt-6-luna"),
     reasoningEffort: setting("WARDROBE_REASONING_EFFORT"),
   };
-}
-
-export function visionModel(setting) {
-  return setting("WARDROBE_VISION_MODEL", setting("WARDROBE_LLM_MODEL", setting("OPENAI_VISION_MODEL", "gpt-5.4-mini")));
 }
 
 export function imageSettings(setting) {

@@ -45,7 +45,7 @@ try {
   };
   const plugin = wardrobeImportApi({ env: {
     WARDROBE_LLM_BASE_URL: "http://localhost:11434/v1",
-    WARDROBE_VISION_MODEL: "local-vision-model",
+    WARDROBE_LLM_MODEL: "local-vision-model",
     OPENAI_IMAGE_API_KEY: "image-key",
   } });
   await plugin.configResolved({ root });
