@@ -6,3 +6,6 @@ dist/
 !.env.example
 *.log
 data/
+
+# Demo video recordings and renders
+demo/out/

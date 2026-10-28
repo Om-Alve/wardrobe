@@ -1,106 +1,97 @@
-<div align="center">
-
 # Wardrobe
 
-Your clothes, extracted and organized with gpt-image.
+A local app for cataloging your clothes, planning outfits, and seeing selected looks on a model. Import photos through the app or with the bundled Codex skills. Wardrobe keeps its library, outfit history, and generated images in `data/` on your machine.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-191919?style=flat-square)](LICENSE)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-191919?style=flat-square)](package.json)
 
-[See the original post →](https://x.com/cdngdev/status/2076812846793650485)
-
-</div>
+[Original post](https://x.com/cdngdev/status/2076812846793650485)
 
 ![Wardrobe gallery](docs/screenshots/gallery.png)
 
 ![Modeled wardrobe editor](docs/screenshots/editor.png)
 
-## Quick start
+## Get started
+
+Use Node.js 22 or later. Clone the repo, install dependencies, and start the local server:
 
 ```bash
 git clone https://github.com/tandpfun/wardrobe.git
 cd wardrobe
-npm install
+npm ci
 cp .env.example .env
 npm run dev
 ```
 
-⚠️ The importer needs an LLM endpoint, `OPENAI_IMAGE_API_KEY` in `.env`, and a PNG reference photo at `data/model-reference.png`. Outfit ideas need only the LLM endpoint.
+Open [http://localhost:5173](http://localhost:5173). The gallery opens without API keys. To plan outfits or import photos, configure an OpenAI-compatible chat endpoint in `.env` with `WARDROBE_LLM_API_KEY`, or set `WARDROBE_LLM_BASE_URL` and `WARDROBE_LLM_MODEL` for a local endpoint. Photo imports need a vision-capable chat model.
 
-Open [localhost:5173](http://localhost:5173).
+To extract garment cutouts or generate modeled photos, also set `OPENAI_IMAGE_API_KEY`. Modeled photos need a PNG reference photo at `data/model-reference.png`. Restart the server after editing `.env`. See [Configuration](#configuration) for all options.
 
-## Import with Codex
+## Use your wardrobe
 
-This repo includes two Codex skills: one imports clothes and generates modeled item photos; the other styles complete outfits and generates a modeled lookbook.
+| Page | What you can do |
+| --- | --- |
+| **Clothes** | Import photos, review garment cutouts, edit colors and attributes, and browse your library. **What to buy next** estimates the complete outfits a proposed item would add. |
+| **Planner** | Ask for looks by occasion, weather, or anchor piece. Create trips with packing lists and plan outfits from the packed items. |
+| **Outfits** | Browse the lookbook, save combinations, and revisit saved outfits. |
+| **Profile** | Set color and fit preferences and your own styling rules. You can also request suggestions from a reference photo and review them before saving. |
+
+The planner builds valid combinations from your clothes before asking the model to pick and explain them. It considers formality, warmth, garment attributes, your profile, and feedback from looks you saved, liked, disliked, or wore. If the wardrobe cannot make enough suitable looks, it returns fewer. You can revise a draft, save it, mark it worn, or generate a modeled photo with **See how it looks**.
+
+Trips track each item as planned, packed, or worn. Trip suggestions use packed and worn items, with a warning for worn pieces. For trips with a destination and near-term dates, **Check destination weather** gets a forecast from [Open-Meteo](https://open-meteo.com/en/docs). Conditions you enter take precedence.
+
+The lookbook groups outfits by style and shows color combinations that match the included [Sanzo Wada dictionary dataset](https://github.com/mattdesl/dictionary-of-colour-combinations). See the [dataset license](scripts/WADA-DATA-LICENSE.md).
+
+## Import and generate with Codex
+
+Open the cloned repo in Codex and use either bundled skill:
 
 ```text
 $import-clothes Import the clothes from ~/Pictures/outfits, create modeled photos, and add them to this wardrobe.
 $generate-outfits Create modeled outfit ideas from my wardrobe.
 ```
 
-Open the cloned repo in Codex and run either prompt. The import skill asks for a local model-reference PNG when needed, reviews every cutout and modeled photo, then writes to `data/library.json` and `data/imported/`. The outfit skill asks how many looks to create, then curates, generates, verifies, and saves the complete collection under `data/`.
+[Import clothes](.agents/skills/import-clothes/SKILL.md) extracts individual garments, reviews the cutouts and modeled photos, and adds them to `data/library.json` and `data/imported/`. [Generate outfits](.agents/skills/generate-outfits/SKILL.md) curates a requested number of looks and saves the collection under `data/`. Both skills ask for missing inputs, including a local model-reference PNG when needed.
 
-## Trips and outfit ideas
-
-Open **Trips & outfits** in the app. You can ask for ideas from the whole wardrobe or create named trips with separate packing lists. Each trip item can be **planned**, **packed**, or **worn / laundry**. Trip suggestions use only packed and worn items; they flag worn items so you can decide whether to reuse them. For any request, you can narrow the selected items and choose an anchor piece.
-
-Describe the occasion and what you want, choose the number of looks, and optionally enter weather conditions. If a trip has a destination and near-term dates, the app can fetch a forecast from [Open-Meteo](https://open-meteo.com/en/docs); your own conditions take precedence. The stylist sees each garment's formality, warmth, fabric, pattern, fit, and named colors. For every request the model first sets a plan: the formality range the occasion needs, the warmest base pieces the weather allows, whether a removable outer layer makes sense, and any pieces your request asks for or rules out. The app then builds every look that fits that plan, ranks them by your history (recently worn pieces rest, underused ones rise, pairings you saved, liked, or wore get a lift) and by common styling conventions, and shows the model a shuffled, varied shortlist to choose from, so every suggestion is a valid look. When the wardrobe lacks something the occasion needs, such as dress shoes, the looks leave that slot out and say so, and you get fewer looks rather than padded ones. Rate a look with thumbs up or down and mark it **Wore it**; a thumbs-down keeps that top and bottom pairing out of suggestions. Revisions prefer changing a single piece. Candidates whose colors follow a combination from Sanzo Wada's dictionary rank higher and are marked for the model, and a saved look shows the combination it follows.
-
-Suggestions are saved locally as drafts in `data/stylist.json`. Ask the stylist to revise a draft, save a combination as an outfit, and assign a saved trip outfit to a day. These actions work without an image API key. **See how it looks** stays disabled until an image key and model reference are available; clicking it then generates a modeled photo for that look only. The result stays in `data/outfit-images/`, and you can review or regenerate it. API keys stay in the local server environment. In the outfit flow, garment and identity images are sent to OpenAI only when you request a modeled photo.
-
-The trip list and outfit flow took inspiration from [toop-closet's suitcases](https://github.com/akleventis/toop-closet) and [mywardrobe's anchor piece and supporting neutrals](https://github.com/newbie1668/mywardrobe). The included Wada color data is MIT licensed; see [its license notice](scripts/WADA-DATA-LICENSE.md).
-
-### All outfits
-
-**Outfits** opens on a lookbook of good outfits from your whole wardrobe. The app builds every combination of top, bottom, optional layer, and the shoes closest in formality, then checks each against [Sanzo Wada's Dictionary of Colour Combinations](https://github.com/mattdesl/dictionary-of-colour-combinations): an outfit follows a combination when each of its non-neutral colors is within ΔE2000 10 of one of the combination's swatches, using at least two of them. It ranks the combinations by that match, by style, and by your profile, and the model picks up to 30 worth wearing, groups them into genres it names for your wardrobe, and explains each in a sentence that may mention only colors the outfit has. Outfits that follow a dictionary combination show its swatches and number. Save an outfit, mark it worn, or hide it; hidden outfits also stay out of the planner's suggestions. The lookbook is kept in `data/stylist.json` and rebuilds when your wardrobe changes.
-
-### What to buy next
-
-On the Clothes page, **What to buy next** reviews your wardrobe for the occasions you dress for, which start from the ones you have asked the stylist about. The model plans each occasion and proposes pieces to buy; the app then adds each proposal to your wardrobe as a hypothetical item and counts the new complete outfits it unlocks: a distinct top and bottom you can wear with shoes, and with a layer when the occasion needs one. Pieces are ordered greedily, so each step shows what it adds on top of the pieces before it, and a first outfit for an occasion counts for more than a fifth outfit for one you already cover. Pieces that would repeat an earlier pick appear as alternatives, and near-twins of what you own are pointed out rather than ranked. The last review is saved.
-
-### Profile
-
-Open **Profile** to describe your coloring and preferences: skin depth on the Monk Skin Tone scale, hair, personal contrast, undertone, fit, goals, colors you love or avoid, and your own rules. **Suggest from my photo** sends your reference photo to the configured model once and fills in suggestions with a confidence for each; nothing is saved until you review it and click Save. Undertone counts only once you confirm it or the photo reading is confident, since lighting changes how skin looks. The profile adds a short description of you to the stylist's prompts and gently favors looks whose contrast and colors suit you; it never rules a look out, never stores weight or measurements, and never sends your height to the model. Switch it off at any time.
-
-### For agents
-
-If you are setting up Wardrobe for a user, ask how they want to import their clothes:
-
-- **Codex:** Ask for a folder or camera-roll location and a model-reference PNG, then extract, model, and import the individual pieces by following [the bundled import skill](.agents/skills/import-clothes/SKILL.md). Afterward, offer to create a requested number of modeled looks with [the outfit-generation skill](.agents/skills/generate-outfits/SKILL.md).
-- **Web UI:** Help the user configure an LLM endpoint, `OPENAI_IMAGE_API_KEY`, and `data/model-reference.png`, then let them import through the app.
-
-## What it does
-
-- Detects every garment in a photo with a vision-capable OpenAI-compatible chat model
-- Extracts clean product cutouts with the OpenAI Images API
-- Describes each cutout's type, formality, warmth, fabric, pattern, and fit with the vision model; you can correct any of them in the item editor
-- Generates an optional modeled editorial preview
-- Keeps originals, jobs, generated images, and the JSON database local in `data/`
-- Supports drag, drop, paste, editing, review, regeneration, and approval
-
-Garment cutouts use a 1024 × 1024 transparent canvas. To reframe older local imports, preview with `npm run normalize:garments`, then run `npm run normalize:garments:apply`. The command saves the original PNGs in `data/original-garments/` before replacing them. To describe garments imported before attributes existed, preview with `npm run describe:garments`, then run `npm run describe:garments:apply`; garments you edited by hand are never overwritten.
+You can also import through **Clothes** in the web app. The importer detects garments with the vision model, extracts transparent 1024 × 1024 cutouts with the Images API, and describes each item's type, formality, warmth, fabric, pattern, and fit. Review and correct the results before adding them to the library.
 
 ## Configuration
 
-| Variable | Default |
+Copy `.env.example` to `.env` and set the services you intend to use. API keys stay in the local server environment. The app sends photos to the configured model when you request analysis, cutouts, or modeled images.
+
+| Variable | Purpose or default |
 | --- | --- |
-| `WARDROBE_LLM_API_KEY` | Key for hosted chat model; blank for a local endpoint |
-| `WARDROBE_LLM_BASE_URL` | `https://api.openai.com/v1` |
-| `WARDROBE_LLM_MODEL` | `gpt-5.4-mini` |
-| `WARDROBE_VISION_MODEL` | `WARDROBE_LLM_MODEL` |
-| `WARDROBE_STYLIST_MODEL` | `WARDROBE_LLM_MODEL` |
-| `WARDROBE_REASONING_EFFORT` | Provider default; `none` makes outfit suggestions much faster on models that support it |
-| `OPENAI_IMAGE_API_KEY` | Required only for cutouts and modeled photos |
-| `OPENAI_IMAGE_BASE_URL` | `https://api.openai.com/v1` |
-| `OPENAI_IMAGE_MODEL` | `gpt-image-2` |
-| `OPENAI_IMAGE_QUALITY` | `high` |
-| `WARDROBE_MODEL_REFERENCE` | `data/model-reference.png` |
-| `WARDROBE_DATA_DIR` | `data` |
+| `WARDROBE_LLM_API_KEY` | Chat API key. Leave blank for a local endpoint. |
+| `WARDROBE_LLM_BASE_URL` | Chat endpoint. Defaults to `https://api.openai.com/v1`. |
+| `WARDROBE_LLM_MODEL` | Chat model. Defaults to `gpt-5.4-mini`. |
+| `WARDROBE_VISION_MODEL` | Model for photo analysis. Defaults to `WARDROBE_LLM_MODEL`. |
+| `WARDROBE_STYLIST_MODEL` | Model for outfit suggestions. Defaults to `WARDROBE_LLM_MODEL`. |
+| `WARDROBE_REASONING_EFFORT` | Optional provider setting. `none` can reduce suggestion latency on supported models. |
+| `OPENAI_IMAGE_API_KEY` | Required for garment cutouts and modeled photos. |
+| `OPENAI_IMAGE_BASE_URL` | Images endpoint. Defaults to `https://api.openai.com/v1`. |
+| `OPENAI_IMAGE_MODEL` | Image model. Defaults to `gpt-image-2`. |
+| `OPENAI_IMAGE_QUALITY` | Image quality. Defaults to `high`. |
+| `WARDROBE_MODEL_REFERENCE` | PNG reference photo. Defaults to `data/model-reference.png`. |
+| `WARDROBE_DATA_DIR` | Local data directory. Defaults to `data`. |
 
-For a local [Ollama OpenAI-compatible endpoint](https://docs.ollama.com/api/openai-compatibility), set `WARDROBE_LLM_BASE_URL=http://localhost:11434/v1` and `WARDROBE_LLM_MODEL` to an installed model. Leave `WARDROBE_LLM_API_KEY` blank. Outfit suggestions work with a text model; photo imports need a vision-capable model, which you can select with `WARDROBE_VISION_MODEL`. The LLM must return JSON that follows the app's requested shape. Keep `OPENAI_IMAGE_API_KEY` separate for image generation. Existing `OPENAI_API_KEY` is accepted as a fallback for both services until you split the configuration; a custom LLM URL never receives that legacy key.
+For a local [Ollama OpenAI-compatible endpoint](https://docs.ollama.com/api/openai-compatibility), set `WARDROBE_LLM_BASE_URL=http://localhost:11434/v1` and `WARDROBE_LLM_MODEL` to an installed model. Leave `WARDROBE_LLM_API_KEY` blank. Outfit suggestions need a text model; photo imports need a vision model. The chat model must return JSON in the shape the app requests.
 
-Run `npm run check` to build the app and exercise the trip and outfit API with local fixtures. The image API call in that check is mocked, so it does not need an API key or incur usage. `npm run eval:live` runs a fixed set of briefs against your configured model on a copy of your wardrobe and writes a report to `data/evals/`; it calls the model, so it uses your API quota.
+The app accepts `OPENAI_API_KEY` as a fallback for both services. A custom chat URL does not receive that legacy key.
 
-## License
+## Local data and maintenance
 
-[MIT](LICENSE)
+Personal photos, generated assets, and the JSON library live in `data/`, which Git ignores. The app also saves trip and outfit drafts in `data/stylist.json`. Do not commit `.env` or `data/`.
+
+To reframe older garment images, run `npm run normalize:garments` to preview changes, then `npm run normalize:garments:apply` to write them. The apply command backs up the original PNGs in `data/original-garments/`.
+
+To add attributes to older imports, run `npm run describe:garments` to preview, then `npm run describe:garments:apply`. Hand-edited attributes are preserved.
+
+## Develop
+
+Run `npm run check` to build the app and exercise the trip, outfit, import, and profile APIs with local fixtures. Its image API call is mocked, so the check does not need an API key. `npm run eval:live` runs fixed outfit briefs against your configured model on a copy of the wardrobe and writes a report to `data/evals/`. It uses your model quota.
+
+The [demo video script](demo/script.md) describes the recording and editing tools in `demo/`. Recordings and renders go in the ignored `demo/out/` directory.
+
+## Credits and license
+
+Trip packing lists and outfit selection took inspiration from [toop-closet](https://github.com/akleventis/toop-closet) and [mywardrobe](https://github.com/newbie1668/mywardrobe). Wardrobe is licensed under [MIT](LICENSE).
