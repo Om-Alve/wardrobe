@@ -7,6 +7,12 @@ This is a fork of [Thijs's Wardrobe](https://github.com/tandpfun/wardrobe). The 
 
 [Thijs's original post](https://x.com/cdngdev/status/2076812846793650485)
 
+## Demo
+
+[![Watch the Wardrobe demo on YouTube](docs/wardrobe-demo-poster.jpg)](https://youtu.be/XdX3HgbV6OM)
+
+[Watch the demo on YouTube](https://youtu.be/XdX3HgbV6OM).
+
 ## What this fork adds
 
 - **Outfit planner:** Describe an occasion, weather, and a preferred piece. The app builds suitable combinations from your clothes, then asks the chat model to choose and explain a varied set.
